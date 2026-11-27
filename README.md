@@ -1,22 +1,36 @@
 # reacalcul
 
-reacalcul remembers the result of a recall check and shows why a later notice changes it for a saved appliance.
+**Same fridge. New answer.** reacalcul is a personal recall watch that remembers a saved appliance label and explains exactly why a later notice changes its coverage.
 
-The judge demo replays two official U.S. CPSC notices for Frigidaire minifridges. Save model `EFMIS121` with sample code `A2210`. The July 24, 2025 notice leaves the model outside its scope. The January 15, 2026 expansion adds the model for the listed range `A2001–A2310`. Repeat with `A2401` to see the serial-range result. The serial values are examples and the notices are real.
+[Try the public Fly Sprite](https://reacalcul-b623b.sprites.app) · [Deployment runs](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml)
 
-- [July notice](https://www.cpsc.gov/Recalls/2025/Curtis-International-Recalls-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards-More-Than-700-000-Reported-in-Property-Damage)
-- [January expansion](https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards)
+## Judge walkthrough
 
-## Run
+1. Leave the example **EFMIS121 / A2210** in the form. Select **Save label and check July**. The July 24, 2025 notice covered four other models.
+2. Select **Replay January expansion**. The same saved label becomes **Newly covered**. The proof card quotes **EFMIS121 Between A2001 and A2310** and links to the notice and manufacturer's refund instructions.
+3. Select **Try A2401**, then replay January. The same model now falls outside the listed serial range. The product photo, both notices, and the approximately **330,000 additional units** are real. Both serial values are illustrative.
 
-Python 3.10+ is sufficient. Run `python3 app.py` and open `http://localhost:8080`.
+[July CPSC notice](https://www.cpsc.gov/Recalls/2025/Curtis-International-Recalls-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards-More-Than-700-000-Reported-in-Property-Damage) · [January expansion](https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards)
 
-The HTTP service stores the model, serial and replay state in a SQLite database, keyed by a random browser cookie. A second browser gets its own state. The public app checks only the selected Frigidaire recall series. A current CPSC feed check is available after the replay. That check is a user-triggered request.
+## What runs
 
-## GitHub deployment
+- **Saved label and replay.** SQLite stores each browser's appliance and the notice it has already seen. Replaying twice does not record a second change.
+- **Source-backed evidence.** A Sprites Custom API connector reads the official CPSC feed. The service uses exact model and serial rules for the two historical notices and uses the official text in the decision receipt.
+- **Daily watch.** GitHub Actions wakes the Sprite once a day for a read-only refresh. The dashboard displays the last successful scan and links to newer notices that may be relevant. A user can also check on demand. New notice formats are referred to the official source for review.
+- **Low-cost hosting.** The Sprite can sleep between requests. The app uses the public CPSC data and has no model API charges. The historical replay is available from its verified snapshot when the feed is unavailable.
 
-The `Deploy to Fly Sprites` workflow deploys every push to `main` and supports manual runs. Set the repository secret `SPRITES_TOKEN` to an authorized Sprites organization token. Set the repository variable `CPSC_CONNECTOR_URL` to the base gateway URL for a Sprites Custom API connector pointing to `https://www.saferproducts.gov`, with `/RestWebServices/Recall` allowed for the `reacalcul` Sprite. The service uses a persistent SQLite path outside each release.
+The watch covers this U.S. Curtis International Frigidaire recall series. Checks and updates are shown in the browser. The January expansion page links to the original notice dated July 24, 2025, even though its unit-count note says July 2024.
 
-GitHub Actions imports both official notices through the connector, installs the web service on the Sprite, and checks the exact release and both sample outcomes at the public URL. Matching uses the serial ranges in the official text. An unsupported range needs review. The replay continues to work from the verified data when the external feed is unavailable.
+## Run locally
 
-A bundled copy of both public CPSC records supports local runs. The official January notice links to the prior notice dated July 24, 2025, even though its unit-count note says July 2024.
+Use Python 3.10+ and run `python3 app.py`. Open `http://localhost:8080`. The repository includes a snapshot of the two public notices for the local replay.
+
+## GitHub-to-Fly deployment
+
+The deploy workflow runs on pushes to `main` and manual dispatch. Configure these repository settings:
+
+- `SPRITES_TOKEN` secret for a Sprites organization token.
+- `WATCH_REFRESH_KEY` secret for a randomly generated 32-byte URL-safe key shared with the scheduled workflow.
+- `CPSC_CONNECTOR_URL` variable for the Sprites Custom API gateway base URL. Point the connector to `https://www.saferproducts.gov` with `/RestWebServices/Recall` allowed for the `reacalcul` Sprite.
+
+GitHub Actions imports verified notice data on the Sprite before activating the release. It then checks the exact public commit, both serial outcomes, replay deduplication, browser session isolation, and scheduled feed authorization. Storage for saved labels and the last feed scan lives outside the release directory.

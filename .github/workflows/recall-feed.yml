@@ -1,0 +1,25 @@
+name: Check CPSC for recall updates
+
+on:
+  schedule:
+    - cron: "23 8 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reacalcul-feed
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Refresh the official feed on the Sprite
+        env:
+          WATCH_REFRESH_KEY: ${{ secrets.WATCH_REFRESH_KEY }}
+        run: |
+          curl --silent --show-error --fail-with-body --max-time 25 --retry 2 \
+            --request POST --header "Authorization: Bearer $WATCH_REFRESH_KEY" \
+            https://reacalcul-b623b.sprites.app/api/feed/refresh

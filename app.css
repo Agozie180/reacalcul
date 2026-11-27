@@ -11,3 +11,35 @@ footer{display:flex;gap:14px;justify-content:space-between;padding:27px 0;font-s
 @media(max-width:780px){.site-header,main{padding-right:24px;padding-left:24px}.site-header{padding-top:18px;padding-bottom:18px}.intro{gap:24px;min-height:0}.photo{height:169px}.workspace{grid-template-columns:1fr;gap:12px}}
 @media(max-width:520px){.site-header,main{padding-right:16px;padding-left:16px}.intro{grid-template-columns:1fr;padding:24px 0 20px;gap:17px}.intro h1{font-size:clamp(39px,10.8vw,58px)}.lede{font-size:15px}.product{display:grid;grid-template-columns:103px 1fr;align-items:center}.product figcaption{border-top:0;flex-direction:column}.photo{height:87px;padding:8px}.panel{padding:20px 17px}.eyebrow{margin-bottom:12px}.header-source{font-size:12px}}
 @media(prefers-reduced-motion:no-preference){.event.match{animation:arrive .24s ease-out}@keyframes arrive{from{opacity:.5;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}}
+.proof {
+  margin: 15px 0 17px;
+  padding: 13px 15px;
+  border: 1px solid #d8e0d6;
+  border-radius: 10px;
+  background: #f6f8f4;
+}
+.proof-action {
+  background: #eef6eb;
+  border-color: #b7d2b6;
+  border-left: 4px solid #447c51;
+}
+.proof-label {
+  display: block;
+  margin-bottom: 3px;
+  color: #355742;
+  font: 700 12px/1.35 "Courier New", monospace;
+}
+.proof strong { display: block; font-size: 21px; letter-spacing: -.035em; }
+.proof p, .watch p { margin: 4px 0 0; color: #425548; font-size: 13px; line-height: 1.5; }
+.proof blockquote {
+  margin: 9px 0 0;
+  padding-left: 9px;
+  border-left: 2px solid #95b59b;
+  color: #294936;
+  font: 700 12px/1.45 "Courier New", monospace;
+}
+.proof .quiet { min-height: 32px; margin-top: 2px; }
+.watch { margin-top: 15px; padding-top: 12px; border-top: 1px solid #e2e7df; }
+.watch h3 { margin: 0; font-size: 14px; }
+.watch small, .watch a { display: inline-block; margin: 5px 0 0; color: #4d6253; font-size: 12px; }
+.watch a { display: block; }

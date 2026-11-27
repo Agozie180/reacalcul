@@ -8,6 +8,7 @@ const notices = {
   baseline: { date: "Jul 24, 2025", label: "Initial recall", description: "Four model numbers with limited serial ranges." },
   expansion: { date: "Jan 15, 2026", label: "Recall expansion", description: "About 330,000 more minifridges included." },
 };
+const noticeNumbers = { baseline: "25-395", expansion: "26-199" };
 const verdictTitles = {
   outside_model: "Model outside this notice", needs_serial: "Enter the serial to check",
   outside_serial: "Outside this notice’s serial range", covered: "Covered by this notice",
@@ -30,7 +31,8 @@ function entry(notice, result, newlyCovered = false) {
   item.append(node("p", result?.reason || notice.description));
   if (result?.evidence) item.append(node("p", result.evidence, "evidence"));
   if (result) {
-    item.append(link(result.source, "Read the CPSC notice ↗"));
+    const number = notice === notices.baseline ? noticeNumbers.baseline : noticeNumbers.expansion;
+    item.append(link(result.source, "CPSC notice " + number + " ↗"));
     if (result.status === "covered") {
       item.append(node("br"));
       const refund = link("https://www.recallrtr.com/minifridge", "Open official refund instructions ↗", "remedy");
@@ -47,10 +49,71 @@ function render(data) {
   timeline.append(entry(notices.baseline, data.baseline), entry(notices.expansion, data.expansion, data.newly_covered));
   byId("results").replaceChildren(timeline);
   byId("progress").textContent = data.expansion ? "Replay complete" : "July result saved";
+  renderProof(data);
+  renderWatch(data.watch);
   byId("actions").hidden = false;
   replay.hidden = !!data.expansion;
   live.hidden = !data.expansion;
 }
+function renderProof(data) {
+  const proof = byId("proof");
+  proof.hidden = !data.expansion;
+  proof.replaceChildren();
+  if (!data.expansion) return;
+
+  const { model: savedModel, serial: savedSerial } = data.appliance;
+  const states = {
+    newly_covered: ["Newly covered", "January added your model and your code falls in the new range."],
+    already_covered: ["The July recall still applies", "The January expansion does not replace your July result."],
+    needs_serial: ["Serial code needed", "Check the rear label against the code format in the official notice."],
+    no_new_match: ["No new match in this replay", "Review each notice below for its exact coverage."],
+  };
+  const [title, detail] = states[data.change];
+  proof.className = "proof " + (data.newly_covered ? "proof-action" : "");
+  const label = node("span", savedModel + (savedSerial ? " / " + savedSerial : ""), "proof-label");
+  proof.append(label, node("strong", title), node("p", detail));
+
+  if (data.newly_covered) {
+    proof.append(node("blockquote", "\u201c" + data.expansion.quote + "\u201d"));
+    const copy = node("button", "Copy decision receipt", "quiet");
+    copy.type = "button";
+    copy.addEventListener("click", async () => {
+      const receipt = [
+        "reacalcul — historical CPSC replay",
+        "Saved label: " + savedModel + " / " + savedSerial,
+        "July 24, 2025: " + data.baseline.reason,
+        data.baseline.source,
+        "January 15, 2026: " + data.expansion.reason,
+        "Quoted rule: " + data.expansion.quote,
+        data.expansion.source,
+        "Manufacturer refund instructions: https://www.recallrtr.com/minifridge",
+      ].join("\n");
+      try {
+        await navigator.clipboard.writeText(receipt);
+        copy.textContent = "Decision receipt copied";
+      } catch {
+        message("Clipboard unavailable. The official source links are below.", true);
+      }
+    });
+    proof.append(copy);
+  }
+}
+
+function renderWatch(watch) {
+  const box = byId("watch");
+  box.hidden = !watch;
+  box.replaceChildren();
+  if (!watch) return;
+  box.append(node("h3", "Current CPSC watch"));
+  box.append(node("p", watch.summary));
+  if (watch.checked_at) {
+    const stamp = new Date(watch.checked_at);
+    const date = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(stamp);
+    box.append(node("small", "Last successful daily scan: " + date + " UTC"));
+  }
+  if (watch.source) box.append(link(watch.source, (watch.title || "Read the newer notice") + " ↗"));
+}
+
 function message(text, error = false) {
   const el = byId("message");
   el.textContent = text;
@@ -89,12 +152,10 @@ function useSample(value) {
 byId("sample").addEventListener("click", () => useSample("A2210"));
 byId("other-sample").addEventListener("click", () => useSample("A2401"));
 replay.addEventListener("click", () => run(replay, "/api/replay", {}, (result) => {
-  if (result.newly_covered) message("Update recorded for your saved fridge.");
+  if (result.recorded) message("Update recorded for your saved fridge.");
 }));
 live.addEventListener("click", () => run(live, "/api/live", {}, (result) => {
-  message(result.summary);
-  if (result.match) {
-    byId("message").append(document.createTextNode(" "), link(result.match.source, "Open newer notice ↗"));
-  }
+  message("");
+  renderWatch(result);
 }));
 api("/api/state").then(render).catch(() => message("Could not load your previous check. Start a new check to retry.", true));

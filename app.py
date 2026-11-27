@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from http.cookies import SimpleCookie, CookieError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,9 +38,10 @@ MAX_BODY = 2048
 MAX_SOURCE = 1_000_000
 REVISION = RELEASE.get("revision", "local")
 SOURCE_TIMEOUT = 12
-LIVE_INTERVAL = 300
+MANUAL_REFRESH_INTERVAL = 900
+SCHEDULED_REFRESH_INTERVAL = 20 * 3600
+WATCH_KEY = RELEASE.get("watch_key", "")
 LIVE_LOCK = threading.Lock()
-LIVE_CACHE = None
 
 
 def http_json(url, timeout=SOURCE_TIMEOUT):
@@ -109,6 +110,7 @@ def matching(notice, model, serial):
                 "reason": f"The table shows codes like {start}. Enter the five-character code shown in the notice format.",
                 "source": notice["source"],
                 "evidence": evidence,
+                "quote": quote,
             }
         if start <= serial <= end:
             return {
@@ -122,6 +124,7 @@ def matching(notice, model, serial):
             "reason": f"Your saved code {serial} falls outside the listed range for {model}.",
             "source": notice["source"],
             "evidence": evidence,
+            "quote": quote,
         }
     return {
         "status": "outside_model",
@@ -154,6 +157,13 @@ def init_db():
                 updated_at INTEGER NOT NULL
             )
         """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS feed_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                records TEXT NOT NULL,
+                checked_at INTEGER NOT NULL
+            )
+        """)
         connection.execute("DELETE FROM checks WHERE updated_at < ?", (int(time.time()) - 30 * 86400,))
 
 
@@ -164,49 +174,83 @@ def read_state(connection, session):
     model, serial = row["model"], row["serial"]
     baseline = matching(REPLAY[0], model, serial)
     expansion = matching(REPLAY[1], model, serial) if row["expanded"] else None
+    if baseline["status"] == "covered":
+        change = "already_covered"
+    elif expansion and expansion["status"] == "covered":
+        change = "newly_covered"
+    elif expansion and expansion["status"] == "needs_serial":
+        change = "needs_serial"
+    else:
+        change = "no_new_match"
     return {
         "appliance": {"model": model, "serial": serial},
         "baseline": baseline,
         "expansion": expansion,
-        "newly_covered": bool(expansion and baseline["status"] != "covered" and expansion["status"] == "covered"),
+        "newly_covered": change == "newly_covered",
+        "change": change,
+        "watch": watch_status(connection, model) if expansion else None,
     }
 
 
-def live_check(appliance):
-    global LIVE_CACHE
+def feed_snapshot(connection):
+    return connection.execute("SELECT records, checked_at FROM feed_state WHERE id = 1").fetchone()
+
+
+def refresh_feed(interval):
     with LIVE_LOCK:
-        now = time.monotonic()
-        if LIVE_CACHE is None or now - LIVE_CACHE[0] >= LIVE_INTERVAL:
-            data = http_json(API)
-            if not isinstance(data, list):
-                raise ValueError("Unexpected CPSC response")
-            records = [item for item in data if is_frigidaire(item)]
-            LIVE_CACHE = (now, records)
-        records = LIVE_CACHE[1]
-    known = {id_for(item) for item in records}
-    if not set(ISSUES).issubset(known):
-        raise ValueError("CPSC returned an incomplete result")
-    newer = [item for item in records if item.get("RecallDate", "")[:10] > REPLAY[1]["date"]]
-    match = None
-    review = False
-    for record in newer:
-        try:
-            notice = compile_notice(record)
-            outcome = matching(notice, appliance["model"], appliance["serial"])
-        except (KeyError, ValueError):
-            review = True
-            continue
-        if outcome["status"] == "covered":
-            match = {"date": notice["date"], "title": notice["title"], **outcome}
-        elif outcome["status"] == "needs_serial":
-            review = True
-    if match:
-        summary = "The CPSC feed has a newer notice covering your saved label."
-    elif review:
-        summary = "A newer notice needs review. Open the CPSC source to check its details."
-    else:
-        summary = "No newer matching notice appeared in the CPSC results for this recall series."
-    return {"summary": summary, "match": match, "source": "https://www.cpsc.gov/Recalls"}
+        with database() as connection:
+            last = feed_snapshot(connection)
+        now = int(time.time())
+        if last and now - last["checked_at"] < interval:
+            return {"checked_at": last["checked_at"], "refreshed": False}
+        payload = http_json(API)
+        if not isinstance(payload, list):
+            raise ValueError("Unexpected CPSC response")
+        records = []
+        for item in payload:
+            if not isinstance(item, dict) or not is_frigidaire(item):
+                continue
+            source = item.get("URL", "")
+            if not source.startswith(("https://www.cpsc.gov/Recalls/", "https://cpsc.gov/Recalls/")):
+                continue
+            records.append({
+                "id": id_for(item),
+                "date": date.fromisoformat(item["RecallDate"][:10]).isoformat(),
+                "title": item["Title"],
+                "source": source,
+                "models": re.findall(r"\bEFMIS[0-9]+(?:-[A-Z0-9]+)?\b", item["Description"].upper()),
+            })
+        if not set(ISSUES).issubset(record["id"] for record in records):
+            raise ValueError("CPSC returned an incomplete result")
+        with database() as connection:
+            connection.execute("""
+                INSERT INTO feed_state(id, records, checked_at) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET records=excluded.records, checked_at=excluded.checked_at
+            """, (json.dumps(records), now))
+        return {"checked_at": now, "refreshed": True}
+
+
+def watch_status(connection, model):
+    snapshot = feed_snapshot(connection)
+    if not snapshot:
+        return {"summary": "The current CPSC feed check is waiting for its first successful scan."}
+    records = json.loads(snapshot["records"])
+    newer = [
+        item for item in records
+        if item["date"] > REPLAY[1]["date"] and (not item["models"] or model in item["models"])
+    ]
+    result = {
+        "checked_at": datetime.fromtimestamp(snapshot["checked_at"], timezone.utc).isoformat(),
+        "summary": "No newer notice mentioning your model appeared in this recall series.",
+    }
+    if newer:
+        item = max(newer, key=lambda notice: notice["date"])
+        result.update({
+            "summary": "A newer notice may be relevant. Review its scope on the CPSC site.",
+            "source": item["source"],
+            "title": item["title"],
+        })
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -266,6 +310,17 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": "Page not found."}, 404)
 
     def do_POST(self):
+        if self.path == "/api/feed/refresh":
+            supplied = self.headers.get("Authorization", "").encode()
+            expected = ("Bearer " + WATCH_KEY).encode()
+            if not WATCH_KEY or not secrets.compare_digest(supplied, expected):
+                self.json_response({"error": "Scheduled refresh credentials required."}, 401)
+                return
+            try:
+                self.json_response(refresh_feed(SCHEDULED_REFRESH_INTERVAL))
+            except (OSError, ValueError, KeyError, TypeError):
+                self.json_response({"error": "The CPSC feed refresh failed. The last successful scan is retained."}, 502)
+            return
         if self.path not in ("/api/check", "/api/replay", "/api/live"):
             self.json_response({"error": "Page not found."}, 404)
             return
@@ -307,11 +362,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/replay":
             with database() as connection:
-                connection.execute("UPDATE checks SET expanded = 1 WHERE session = ?", (session,))
+                changed = connection.execute(
+                    "UPDATE checks SET expanded = 1 WHERE session = ? AND expanded = 0", (session,)
+                ).rowcount
                 state = read_state(connection, session)
             if not state:
                 self.json_response({"error": "Check the July notice first."}, 409)
                 return
+            state["recorded"] = bool(changed and state["newly_covered"])
             self.json_response(state)
             return
         with database() as connection:
@@ -320,8 +378,10 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": "Check the July notice first."}, 409)
             return
         try:
-            self.json_response(live_check(state["appliance"]))
-        except (OSError, URLError, ValueError):
+            refresh_feed(MANUAL_REFRESH_INTERVAL)
+            with database() as connection:
+                self.json_response(watch_status(connection, state["appliance"]["model"]))
+        except (OSError, URLError, ValueError, KeyError, TypeError):
             self.json_response({"error": "The CPSC feed is temporarily unavailable. The historical results are still available."}, 502)
 
 

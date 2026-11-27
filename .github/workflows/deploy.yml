@@ -23,5 +23,6 @@ jobs:
       - name: Publish and verify reacalcul
         env:
           SPRITES_TOKEN: ${{ secrets.SPRITES_TOKEN }}
+          WATCH_REFRESH_KEY: ${{ secrets.WATCH_REFRESH_KEY }}
           CPSC_CONNECTOR_URL: ${{ vars.CPSC_CONNECTOR_URL }}
         run: python3 scripts/deploy.py

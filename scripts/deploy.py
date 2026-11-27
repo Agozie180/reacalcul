@@ -14,6 +14,7 @@ NAME = "reacalcul"
 SPRITE = f"/sprites/{NAME}"
 TOKEN = os.environ["SPRITES_TOKEN"]
 CONNECTOR = os.environ["CPSC_CONNECTOR_URL"]
+WATCH_KEY = os.environ["WATCH_REFRESH_KEY"]
 REVISION = os.environ["GITHUB_SHA"]
 SOURCE = Path(__file__).resolve().parents[1]
 FILES = ("app.py", "index.html", "app.css", "app.js", "cpsc-notices.json")
@@ -22,6 +23,9 @@ if not TOKEN or not re.fullmatch(r"[0-9a-f]{40}", REVISION):
     raise SystemExit("GitHub deployment needs SPRITES_TOKEN and a valid commit revision.")
 if not re.fullmatch(r"https://api\.sprites\.dev/v1/gateway/custom_api/[A-Za-z0-9_-]+", CONNECTOR):
     raise SystemExit("Set CPSC_CONNECTOR_URL to the CPSC Custom API gateway base URL.")
+
+if not re.fullmatch(r"[A-Za-z0-9_-]{43}", WATCH_KEY):
+    raise SystemExit("Set WATCH_REFRESH_KEY to a random 32-byte URL-safe key.")
 
 RELEASE = f"/home/sprite/reacalcul-releases/{REVISION}"
 SERVICE_ROOT = "/home/sprite/reacalcul"
@@ -43,8 +47,8 @@ def platform(path, method="GET", payload=None, *, raw=None):
         raise RuntimeError(f"Sprites {method} {path.split('?')[0]} returned HTTP {error.code}") from None
 
 
-def upload_bytes(name, data):
-    query = urlencode({"path": name, "workingDir": RELEASE, "mkdir": "true", "mode": "0644"})
+def upload_bytes(name, data, mode="0644"):
+    query = urlencode({"path": name, "workingDir": RELEASE, "mkdir": "true", "mode": mode})
     platform(f"{SPRITE}/fs/write?{query}", "PUT", raw=data)
 
 
@@ -60,9 +64,9 @@ def run_on_sprite(*args):
         raise RuntimeError("Sprite command failed: " + output.decode(errors="replace")[-1600:])
 
 
-def public_json(opener, base_url, path, payload=None):
+def public_json(opener, base_url, path, payload=None, *, headers=None):
     data = json.dumps(payload).encode() if payload is not None else None
-    req = Request(base_url + path, data=data, headers={"Content-Type": "application/json"})
+    req = Request(base_url + path, data=data, headers={"Content-Type": "application/json", **(headers or {})})
     with opener.open(req, timeout=18) as response:
         return json.load(response)
 
@@ -83,17 +87,26 @@ def verify(url):
     july = public_json(opener, url, "/api/check", {"model": "EFMIS121", "serial": "A2210"})
     january = public_json(opener, url, "/api/replay", {})
     restored = public_json(opener, url, "/api/state")
+    repeated = public_json(opener, url, "/api/replay", {})
     second = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
     isolated = public_json(second, url, "/api/state")
     public_json(second, url, "/api/check", {"model": "EFMIS121", "serial": "A2401"})
     control = public_json(second, url, "/api/replay", {})
     assert july["baseline"]["status"] == "outside_model"
     assert january["newly_covered"] and january["expansion"]["status"] == "covered"
-    assert restored == january and isolated == {}
+    assert january["recorded"] and not repeated["recorded"]
+    assert restored["expansion"] == january["expansion"] and isolated == {}
     assert control["expansion"]["status"] == "outside_serial" and not control["newly_covered"]
+    try:
+        public_json(opener, url, "/api/feed/refresh", {})
+    except HTTPError as error:
+        assert error.code == 401
+    else:
+        raise AssertionError("The scheduled endpoint accepted a request without authorization.")
+    refresh = public_json(opener, url, "/api/feed/refresh", {}, headers={"Authorization": f"Bearer {WATCH_KEY}"})
     live = public_json(opener, url, "/api/live", {})
-    assert live["summary"]
-    print("Verified the public release, connector import, both serial outcomes, and browser session isolation.")
+    assert refresh["checked_at"] and live["checked_at"]
+    print("Verified the release, connector import, replay deduplication, both outcomes, session isolation, and scheduled feed authorization.")
 
 
 def main():
@@ -108,8 +121,8 @@ def main():
         raise RuntimeError("Sprites returned an unexpected public URL.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         list(pool.map(upload, FILES))
-    config = json.dumps({"connector": CONNECTOR, "revision": REVISION}).encode()
-    upload_bytes("release.json", config)
+    config = json.dumps({"connector": CONNECTOR, "revision": REVISION, "watch_key": WATCH_KEY}).encode()
+    upload_bytes("release.json", config, "0600")
     run_on_sprite("python3", f"{RELEASE}/app.py", "import")
     service = f"{SPRITE}/services/web"
     run_on_sprite("mkdir", "-p", SERVICE_ROOT)
