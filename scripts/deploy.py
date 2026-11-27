@@ -94,9 +94,18 @@ def verify(url):
     control = public_json(second, url, "/api/replay", {})
     assert july["baseline"]["status"] == "outside_model"
     assert january["newly_covered"] and january["expansion"]["status"] == "covered"
+    assert january["expansion"]["quote"] == "EFMIS121 Between A2001 and A2310"
     assert january["recorded"] and not repeated["recorded"]
     assert restored["expansion"] == january["expansion"] and isolated == {}
     assert control["expansion"]["status"] == "outside_serial" and not control["newly_covered"]
+    for model, serial, status, change in (
+        ("EFMIS121", "", "needs_serial", "needs_serial"),
+        ("EFMIS129", "A2210", "outside_model", "already_covered"),
+        ("EFMIS129-B", "A2210", "outside_model", "no_new_match"),
+    ):
+        public_json(second, url, "/api/check", {"model": model, "serial": serial})
+        case = public_json(second, url, "/api/replay", {})
+        assert case["expansion"]["status"] == status and case["change"] == change
     try:
         public_json(opener, url, "/api/feed/refresh", {})
     except HTTPError as error:

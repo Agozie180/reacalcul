@@ -118,6 +118,7 @@ def matching(notice, model, serial):
                 "reason": f"Your saved {model} with code {serial} falls within the listed range.",
                 "source": notice["source"],
                 "evidence": evidence,
+                "quote": quote,
             }
         return {
             "status": "outside_serial",
