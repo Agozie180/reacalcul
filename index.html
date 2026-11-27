@@ -3,13 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Reacalcul tells you when a recall you already checked starts covering your exact appliance.">
+  <meta name="description" content="Get a device alert if an updated Frigidaire minifridge recall starts covering your exact serial number.">
   <meta name="theme-color" content="#f4f3ee">
   <meta property="og:title" content="reacalcul · Same fridge. New answer.">
-  <meta property="og:description" content="See exactly why a real recall expansion changed the answer for a saved Frigidaire minifridge.">
+  <meta property="og:description" content="A personal recall watch. Save your Frigidaire label and get a device alert if a revised CPSC notice adds it.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="https://www.cpsc.gov/s3fs-public/Picture4_20.jpg">
   <title>reacalcul · Same fridge. New answer.</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -23,10 +25,11 @@
       <div>
         <p class="eyebrow">A personal recall watch</p>
         <h1 id="intro-title">Same fridge.<br>New answer.</h1>
-        <p class="lede">A recall expanded to cover about 330,000 more minifridges. Reacalcul remembers the label you checked and shows whether that change includes yours.</p>
+        <p class="lede">Save your fridge’s model and serial once. Reacalcul checks official recall updates and alerts this device if the listed range expands to include yours.</p>
         <div class="hero-action">
-          <button class="primary" type="button" id="run-demo">See what changed <span aria-hidden="true">→</span></button>
-          <span>Historical replay · real CPSC notices</span>
+          <button class="primary" type="button" id="run-demo">Replay a real recall <span aria-hidden="true">→</span></button>
+          <a href="#device-watch">Set up my watch</a>
+          <span class="hero-context">January 2026 · about 330,000 more minifridges</span>
         </div>
       </div>
       <figure class="product">
@@ -35,22 +38,35 @@
       </figure>
     </section>
     <section class="workspace" aria-label="Frigidaire recall replay">
-      <div class="panel setup">
-        <div class="kicker">Historical replay <span>2025–2026</span></div>
-        <h2>Fridge sticker</h2>
-        <p class="muted">The form starts with an example label. You can also enter the model and code from the sticker on the back.</p>
+      <div class="panel setup" id="device-watch">
+        <div class="kicker">Your watch <span>U.S. Frigidaire minifridges</span></div>
+        <h2>Save your fridge label</h2>
+        <p class="muted">Use the model and five-character code from the sticker on the back. The form starts with an example.</p>
         <form id="sticker">
           <div class="fields">
             <label for="model">Model <input id="model" name="model" value="EFMIS121" maxlength="24" required spellcheck="false" autocapitalize="characters"></label>
             <label for="serial">Serial <input id="serial" name="serial" value="A2210" maxlength="32" spellcheck="false" autocapitalize="characters"></label>
           </div>
           <div class="controls">
-            <button class="primary" id="check" type="submit">Save label and check July <span aria-hidden="true">→</span></button>
-            <button class="quiet" id="sample" type="button">Reset to A2210</button>
-            <button class="quiet" id="other-sample" type="button">Try A2401</button>
+            <button class="primary" id="check" type="submit">Save fridge label <span aria-hidden="true">→</span></button>
           </div>
         </form>
-        <p class="privacy">U.S. Frigidaire recall series. The sample labels are illustrative. The notices and refund instructions come from the CPSC.</p>
+        <div class="device-card" id="device-card" hidden>
+          <div class="device-status">
+            <h3>Device alerts</h3>
+            <span id="watch-label"></span>
+          </div>
+          <p id="device-status" class="muted" aria-live="polite"></p>
+          <div class="controls device-controls">
+            <button class="primary" type="button" id="enable-push">Enable device alerts</button>
+            <button class="quiet" type="button" id="disable-push" hidden>Turn off alerts</button>
+            <button class="quiet" type="button" id="live">Check CPSC now</button>
+          </div>
+          <p class="message" id="device-message" role="status"></p>
+          <div id="latest-alert" hidden></div>
+          <div class="watch" id="watch" hidden></div>
+        </div>
+        <p class="privacy">One label per browser. Covers the Curtis International Frigidaire recall series. Sample serials are illustrative.</p>
       </div>
       <div class="panel history" id="history-panel">
         <div class="kicker">Recall timeline <span id="progress">Ready to check</span></div>
@@ -64,10 +80,9 @@
         </div>
         <div id="actions" class="controls history-actions" hidden>
           <button class="primary" id="replay" type="button">Replay January expansion <span aria-hidden="true">→</span></button>
-          <button class="quiet" id="live" type="button" hidden>Refresh current CPSC feed</button>
+
         </div>
         <p class="message" id="message" role="status"></p>
-        <div class="watch" id="watch" hidden></div>
       </div>
     </section>
     <footer><span>reacalcul</span><a href="https://github.com/Agozie180/reacalcul" target="_blank" rel="noopener">Source on GitHub ↗</a><a href="https://www.cpsc.gov/Recalls/CPSC-Recalls-Application-Program-Interface-API-Information" target="_blank" rel="noopener">CPSC data ↗</a></footer>

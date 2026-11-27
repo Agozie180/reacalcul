@@ -1,0 +1,10 @@
+{
+  "id": "/",
+  "name": "Reacalcul Recall Watch",
+  "short_name": "Reacalcul",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#f4f3ee",
+  "background_color": "#f4f3ee"
+}

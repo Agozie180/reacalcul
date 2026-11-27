@@ -17,7 +17,7 @@ CONNECTOR = os.environ["CPSC_CONNECTOR_URL"]
 WATCH_KEY = os.environ["WATCH_REFRESH_KEY"]
 REVISION = os.environ["GITHUB_SHA"]
 SOURCE = Path(__file__).resolve().parents[1]
-FILES = ("app.py", "index.html", "app.css", "app.js", "cpsc-notices.json")
+FILES = ("app.py", "index.html", "app.css", "app.js", "sw.js", "manifest.webmanifest", "cpsc-notices.json", "watch_push.py", "requirements.txt")
 
 if not TOKEN or not re.fullmatch(r"[0-9a-f]{40}", REVISION):
     raise SystemExit("GitHub deployment needs SPRITES_TOKEN and a valid commit revision.")
@@ -87,6 +87,12 @@ def verify(url):
     demo = public_json(opener, url, "/api/demo", {})
     assert demo["change"] == "newly_covered"
     assert demo["preview"] and demo["control"]["status"] == "outside_serial"
+    example = demo["alert_example"]
+    assert example["example"] and example["range"] == ["A2001", "A2310"]
+    assert public_json(opener, url, "/api/demo", {"serial": "A2401"})["change"] == "no_new_match"
+    assert re.fullmatch(r"[A-Za-z0-9_-]{87}", public_json(opener, url, "/api/push/key")["key"])
+    with opener.open(url + "/sw.js", timeout=18) as worker:
+        assert worker.status == 200 and b"notificationclick" in worker.read()
     assert public_json(opener, url, "/api/state") == {}
     july = public_json(opener, url, "/api/check", {"model": "EFMIS121", "serial": "A2210"})
     january = public_json(opener, url, "/api/replay", {})
@@ -99,7 +105,12 @@ def verify(url):
     saved = public_json(second, url, "/api/state")
     public_json(second, url, "/api/demo", {})
     assert public_json(second, url, "/api/state") == saved
-    assert july["baseline"]["status"] == "outside_model"
+    assert july["baseline"]["status"] == "outside_model" and not july["notifications"]["enabled"]
+    assert july["watch"] is not None
+    checked = public_json(second, url, "/api/check", {"model": "EFMIS121", "serial": "A2210", "current": True})
+    assert checked["expansion"]["status"] == "covered"
+    with opener.open(url + "/?alert=example", timeout=18) as page:
+        assert page.status == 200 and b"Replay a real recall" in page.read()
     assert january["newly_covered"] and january["expansion"]["status"] == "covered"
     assert january["expansion"]["quote"] == "EFMIS121 Between A2001 and A2310"
     assert january["recorded"] and not repeated["recorded"]
@@ -122,7 +133,7 @@ def verify(url):
     refresh = public_json(opener, url, "/api/feed/refresh", {}, headers={"Authorization": f"Bearer {WATCH_KEY}"})
     live = public_json(opener, url, "/api/live", {})
     assert refresh["checked_at"] and live["checked_at"]
-    print("Verified the release, connector import, replay deduplication, both outcomes, session isolation, and scheduled feed authorization.")
+    print("Verified the release, connector import, replay deduplication, both outcomes, session isolation, and scheduled feed authorization, and the public Web Push demo and worker.")
 
 
 def main():
@@ -139,13 +150,16 @@ def main():
         list(pool.map(upload, FILES))
     config = json.dumps({"connector": CONNECTOR, "revision": REVISION, "watch_key": WATCH_KEY}).encode()
     upload_bytes("release.json", config, "0600")
-    run_on_sprite("python3", f"{RELEASE}/app.py", "import")
+    python = f"{RELEASE}/venv/bin/python"
+    run_on_sprite("python3", "-m", "venv", f"{RELEASE}/venv")
+    run_on_sprite(python, "-m", "pip", "install", "--disable-pip-version-check", "-r", f"{RELEASE}/requirements.txt")
+    run_on_sprite(python, f"{RELEASE}/app.py", "import")
     service = f"{SPRITE}/services/web"
     run_on_sprite("mkdir", "-p", SERVICE_ROOT)
     run_on_sprite("ln", "-sfn", f"{RELEASE}/app.py", f"{SERVICE_ROOT}/incoming.py")
     run_on_sprite("mv", "-Tf", f"{SERVICE_ROOT}/incoming.py", f"{SERVICE_ROOT}/app.py")
     platform(service, "PUT", {
-        "cmd": "python3",
+        "cmd": python,
         "args": [f"{SERVICE_ROOT}/app.py", "serve"],
         "dir": SERVICE_ROOT,
         "needs": [],

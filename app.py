@@ -13,8 +13,10 @@ from http.cookies import SimpleCookie, CookieError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
+
+import watch_push
 
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ.get("REACALCUL_DB", ROOT / "reacalcul.sqlite"))
@@ -30,6 +32,8 @@ ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
 }
 REGEX = re.compile(r"\b(EFMIS[0-9]+)\s+Between\s+(A[0-9]{4})\s+(?:and|to)\s+(A[0-9]{4})\b", re.I)
 MODEL = re.compile(r"[A-Z0-9][A-Z0-9-]{1,23}")
@@ -40,7 +44,8 @@ MAX_SOURCE = 1_000_000
 REVISION = RELEASE.get("revision", "local")
 SOURCE_TIMEOUT = 12
 MANUAL_REFRESH_INTERVAL = 900
-SCHEDULED_REFRESH_INTERVAL = 20 * 3600
+SCHEDULED_REFRESH_INTERVAL = 23 * 3600 + 50 * 60
+REFUND_URL = "https://www.recallrtr.com/minifridge"
 WATCH_KEY = RELEASE.get("watch_key", "")
 LIVE_LOCK = threading.Lock()
 
@@ -143,6 +148,7 @@ def matching(notice, model, serial):
 def database():
     connection = sqlite3.connect(DB, timeout=8)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     try:
         with connection:
             yield connection
@@ -180,14 +186,20 @@ def init_db():
                 PRIMARY KEY(id, fingerprint)
             )
         """)
-        connection.execute("DELETE FROM checks WHERE updated_at < ?", (int(time.time()) - 30 * 86400,))
+        watch_push.initialize(connection)
+        connection.execute("""
+            DELETE FROM checks WHERE updated_at < ?
+            AND session NOT IN (SELECT session FROM push_subscriptions)
+        """, (int(time.time()) - 365 * 86400,))
 
 
 def read_state(connection, session):
     row = connection.execute("SELECT * FROM checks WHERE session = ?", (session,)).fetchone()
     if not row:
         return {}
-    return replay_state(connection, row["model"], row["serial"], row["expanded"], row["updated_at"])
+    state = replay_state(connection, row["model"], row["serial"], row["expanded"], row["updated_at"])
+    state["notifications"] = watch_push.status(connection, session)
+    return state
 
 
 def replay_state(connection, model, serial, expanded, saved_at):
@@ -207,7 +219,7 @@ def replay_state(connection, model, serial, expanded, saved_at):
         "expansion": expansion,
         "newly_covered": change == "newly_covered",
         "change": change,
-        "watch": watch_status(connection, model, serial, saved_at) if expansion and saved_at is not None else None,
+        "watch": watch_status(connection, model, serial, saved_at) if saved_at is not None else None,
         "saved_at": saved_at,
         "preview": saved_at is None,
         "control": matching(REPLAY[1], "EFMIS121", "A2401") if expansion and (model, serial) == ("EFMIS121", "A2210") else None,
@@ -241,6 +253,7 @@ def feed_record(item):
         "source": source,
         "models": sorted(set(re.findall(r"\bEFMIS[0-9]+(?:-[A-Z0-9]+)?\b", description.upper()))),
         "ranges": ranges,
+        "remedy": REFUND_URL if id_for(item) in ISSUES and any('refund' in remedy.lower() for remedy in remedies) else None,
         "fingerprint": fingerprint,
         "scope_fingerprint": scope_fingerprint,
     }
@@ -251,6 +264,7 @@ def record_feed(connection, records, checked_at):
     previous_records = json.loads(snapshot["records"]) if snapshot else []
     initialized = bool(previous_records) and all(item.get("fingerprint") for item in previous_records)
     if initialized:
+        watch_push.queue_changes(connection, previous_records, records, checked_at)
         previous = {item["id"]: item for item in previous_records}
         for item in records:
             before = previous.get(item["id"])
@@ -307,6 +321,7 @@ def matching_change(connection, model, serial, saved_at):
             "summary": "A watched notice changed. Review the official text." if before else "A new notice may apply. Review the official scope.",
             "source": after["source"],
             "title": after["title"],
+            "remedy": after.get("remedy"),
         }
         if before_range != after_range and (before_range or after_range):
             result["before_range"] = before_range
@@ -338,6 +353,48 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "reacalcul"
     sys_version = ""
 
+    def push_action(self, session, payload):
+        action = payload.get("action")
+        if action == "example":
+            subscription = watch_push.validate_subscription(payload.get("subscription"))
+            with database() as connection:
+                allowed = watch_push.allow_demo(connection, subscription["endpoint"], int(time.time()))
+                key = watch_push.vapid_key(connection) if allowed else None
+            if not allowed:
+                self.json_response({"error": "An example was requested recently. Try again in a minute."}, 429)
+                return
+            example = historical_notification()
+            result = watch_push.deliver(subscription, example, key)
+            if not 200 <= result < 300:
+                self.json_response({
+                    "error": "The browser push service could not accept the example. Try again in a minute.",
+                    "expired": result in (404, 410),
+                }, 502)
+                return
+            self.json_response({"accepted": True})
+            return
+
+        with watch_push.DELIVERY_LOCK, database() as connection:
+            state = read_state(connection, session)
+            if not state:
+                self.json_response({"error": "Save your fridge label before enabling device alerts."}, 409)
+                return
+            if action == "enable":
+                model = state["appliance"]["model"]
+                serial = state["appliance"]["serial"]
+                if not re.fullmatch(r"EFMIS[0-9]+(?:-[A-Z0-9]+)?", model) or not RANGE_SERIAL.fullmatch(serial):
+                    self.json_response({"error": "Enter a supported EFMIS model and the five-character code on the label."}, 400)
+                    return
+                subscription = watch_push.validate_subscription(payload.get("subscription"))
+                watch_push.subscribe(connection, session, subscription)
+            elif action == "disable":
+                watch_push.unsubscribe(connection, session)
+            else:
+                self.json_response({"error": "Choose a notification action."}, 400)
+                return
+            notifications = watch_push.status(connection, session)
+        self.json_response(notifications, cookie=session)
+
     def send_bytes(self, status, raw, content_type, cookie=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -348,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' https://www.cpsc.gov; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         if cookie:
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" or self.headers.get("Host", "").endswith(".sprites.app") else ""
-            self.send_header("Set-Cookie", f"reacalcul={cookie}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax{secure}")
+            self.send_header("Set-Cookie", f"reacalcul={cookie}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{secure}")
         self.end_headers()
         if self.command != "HEAD":
             try:
@@ -374,8 +431,9 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
-        if self.path in ASSETS:
-            name, content_type = ASSETS[self.path]
+        path = urlsplit(self.path).path
+        if path in ASSETS:
+            name, content_type = ASSETS[path]
             self.send_bytes(200, (ROOT / name).read_bytes(), content_type)
         elif self.path == "/healthz":
             self.json_response({
@@ -384,9 +442,14 @@ class Handler(BaseHTTPRequestHandler):
                 "revision": REVISION,
             })
         elif self.path == "/api/state":
+            session = self.cookie()
             with database() as connection:
-                state = read_state(connection, self.cookie())
-            self.json_response(state)
+                state = read_state(connection, session)
+            self.json_response(state, cookie=session if state else None)
+        elif self.path == "/api/push/key":
+            with database() as connection:
+                key = watch_push.public_key(connection)
+            self.json_response({"key": key})
         else:
             self.json_response({"error": "Page not found."}, 404)
 
@@ -398,11 +461,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response({"error": "Scheduled refresh credentials required."}, 401)
                 return
             try:
-                self.json_response(refresh_feed(SCHEDULED_REFRESH_INTERVAL))
+                status = refresh_feed(SCHEDULED_REFRESH_INTERVAL)
             except (OSError, ValueError, KeyError, TypeError):
+                watch_push.dispatch(database)
                 self.json_response({"error": "The CPSC feed refresh failed. The last successful scan is retained."}, 502)
+            else:
+                status["alerts_accepted"] = watch_push.dispatch(database)
+                self.json_response(status)
             return
-        if self.path not in ("/api/check", "/api/demo", "/api/replay", "/api/live"):
+        if self.path not in ("/api/check", "/api/demo", "/api/replay", "/api/live", "/api/push"):
             self.json_response({"error": "Page not found."}, 404)
             return
         if self.headers.get_content_type() != "application/json":
@@ -419,9 +486,21 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": "The form could not be read."}, 400)
             return
         session = self.cookie()
+        if self.path == "/api/push":
+            try:
+                self.push_action(session, payload)
+            except ValueError as error:
+                self.json_response({"error": str(error)}, 400)
+            return
         if self.path == "/api/demo":
+            serial = payload.get("serial", "A2210")
+            if serial not in ("A2210", "A2401"):
+                self.json_response({"error": "Choose one of the example serials."}, 400)
+                return
             with database() as connection:
-                state = replay_state(connection, "EFMIS121", "A2210", True, None)
+                state = replay_state(connection, "EFMIS121", serial, True, None)
+            if state["newly_covered"]:
+                state["alert_example"] = historical_notification()
             self.json_response(state)
             return
         if self.path == "/api/check":
@@ -435,18 +514,26 @@ class Handler(BaseHTTPRequestHandler):
             if not MODEL.fullmatch(model) or serial and not SERIAL.fullmatch(serial):
                 self.json_response({"error": "Enter model and serial using letters, digits, or hyphens."}, 400)
                 return
+            expanded = int(payload.get("current") is True)
             new_session = session or secrets.token_urlsafe(32)
-            with database() as connection:
+            with watch_push.DELIVERY_LOCK, database() as connection:
+                previous = connection.execute(
+                    "SELECT model, serial FROM checks WHERE session = ?", (new_session,)
+                ).fetchone()
+                if previous and tuple(previous) != (model, serial):
+                    connection.execute("DELETE FROM push_deliveries WHERE session = ?", (new_session,))
+                    if not re.fullmatch(r"EFMIS[0-9]+(?:-[A-Z0-9]+)?", model) or not RANGE_SERIAL.fullmatch(serial):
+                        watch_push.unsubscribe(connection, new_session)
                 connection.execute("""
                     INSERT INTO checks(session, model, serial, expanded, updated_at)
-                    VALUES (?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(session) DO UPDATE SET model=excluded.model, serial=excluded.serial,
-                        expanded=0, updated_at=CASE
+                        expanded=excluded.expanded, updated_at=CASE
                             WHEN checks.model=excluded.model AND checks.serial=excluded.serial THEN checks.updated_at
                             ELSE excluded.updated_at END
-                """, (new_session, model, serial, int(time.time())))
+                """, (new_session, model, serial, expanded, int(time.time())))
                 state = read_state(connection, new_session)
-            self.json_response(state, cookie=new_session if not session else None)
+            self.json_response(state, cookie=new_session)
             return
         if self.path == "/api/replay":
             with database() as connection:
@@ -467,10 +554,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             refresh_feed(MANUAL_REFRESH_INTERVAL)
+            watch_push.dispatch(database, limit=2)
             with database() as connection:
                 self.json_response(watch_status(connection, state["appliance"]["model"], state["appliance"]["serial"], state["saved_at"]))
         except (OSError, URLError, ValueError, KeyError, TypeError):
             self.json_response({"error": "The CPSC feed is temporarily unavailable. The historical results are still available."}, 502)
+
+
+def historical_notification():
+    model, serial = "EFMIS121", "A2210"
+    notice = REPLAY[1]
+    rule = matching(notice, model, serial)
+    if rule["status"] != "covered" or matching(REPLAY[0], model, serial)["status"] == "covered":
+        raise ValueError("The historical example is no longer available.")
+    ranges = {name: [start, end] for name, start, end, _ in notice["rules"]}
+    return watch_push.notification(model, serial, {**notice, "ranges": ranges, "remedy": REFUND_URL}, example=True)
 
 
 def import_replay():

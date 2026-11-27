@@ -2,7 +2,7 @@ name: Check CPSC for recall updates
 
 on:
   schedule:
-    - cron: "23 8 * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
 
 permissions: {}

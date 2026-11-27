@@ -20,8 +20,12 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Test notice changes
-        run: python3 -m unittest discover -s tests
+      - name: Install push dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/reacalcul-venv"
+          "$RUNNER_TEMP/reacalcul-venv/bin/python" -m pip install -r requirements.txt
+      - name: Test recall matching and notification delivery
+        run: '"$RUNNER_TEMP/reacalcul-venv/bin/python" -m unittest discover -s tests'
       - name: Publish and verify reacalcul
         env:
           SPRITES_TOKEN: ${{ secrets.SPRITES_TOKEN }}
