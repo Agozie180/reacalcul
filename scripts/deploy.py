@@ -17,6 +17,7 @@ CONNECTOR = os.environ["CPSC_CONNECTOR_URL"]
 WATCH_KEY = os.environ["WATCH_REFRESH_KEY"]
 REVISION = os.environ["GITHUB_SHA"]
 SOURCE = Path(__file__).resolve().parents[1]
+DATABASE = "/home/sprite/reacalcul-data/reacalcul.sqlite"
 FILES = ("app.py", "index.html", "app.css", "app.js", "sw.js", "manifest.webmanifest", "cpsc-notices.json", "watch_push.py", "requirements.txt")
 
 if not TOKEN or not re.fullmatch(r"[0-9a-f]{40}", REVISION):
@@ -28,8 +29,6 @@ if not re.fullmatch(r"[A-Za-z0-9_-]{43}", WATCH_KEY):
     raise SystemExit("Set WATCH_REFRESH_KEY to a random 32-byte URL-safe key.")
 
 RELEASE = f"/home/sprite/reacalcul-releases/{REVISION}"
-SERVICE_ROOT = "/home/sprite/reacalcul"
-
 
 def platform(path, method="GET", payload=None, *, raw=None):
     headers = {"Authorization": f"Bearer {TOKEN}"}
@@ -64,19 +63,19 @@ def run_on_sprite(*args):
         raise RuntimeError("Sprite command failed: " + output.decode(errors="replace")[-1600:])
 
 
-def public_json(opener, base_url, path, payload=None, *, headers=None):
+def public_json(opener, base_url, path, payload=None, *, headers=None, timeout=18):
     data = json.dumps(payload).encode() if payload is not None else None
     req = Request(base_url + path, data=data, headers={"Content-Type": "application/json", **(headers or {})})
-    with opener.open(req, timeout=18) as response:
+    with opener.open(req, timeout=timeout) as response:
         return json.load(response)
 
 
 def verify(url):
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
     last_health = {}
-    for _ in range(12):
+    for _ in range(8):
         try:
-            last_health = public_json(opener, url, "/healthz")
+            last_health = public_json(opener, url, "/healthz", timeout=6)
             if last_health == {"ok": True, "connector_verified": True, "revision": REVISION}:
                 break
         except (URLError, TimeoutError, ValueError):
@@ -151,28 +150,32 @@ def main():
     config = json.dumps({"connector": CONNECTOR, "revision": REVISION, "watch_key": WATCH_KEY}).encode()
     upload_bytes("release.json", config, "0600")
     dependencies = f"{RELEASE}/deps"
+    print("Uploading the tested Linux dependencies.", flush=True)
     upload_bytes("deps.tar.gz", Path(os.environ["PUSH_DEPENDENCIES"]).read_bytes())
     run_on_sprite("mkdir", "-p", dependencies)
     run_on_sprite("tar", "-xzf", f"{RELEASE}/deps.tar.gz", "-C", dependencies)
-    run_on_sprite("env", f"PYTHONPATH={dependencies}", "python3", f"{RELEASE}/app.py", "import")
+    runtime = ("/usr/bin/env", f"PYTHONPATH={RELEASE}:{dependencies}", f"REACALCUL_DB={DATABASE}", "python3")
+    run_on_sprite(*runtime, f"{RELEASE}/app.py", "import")
+    run_on_sprite(*runtime, "-c", "import app; app.init_db(); app.load_replay()")
+    print("Connector import and database initialization succeeded on the Sprite.", flush=True)
     service = f"{SPRITE}/services/web"
-    run_on_sprite("mkdir", "-p", SERVICE_ROOT)
-    run_on_sprite("ln", "-sfn", f"{RELEASE}/app.py", f"{SERVICE_ROOT}/incoming.py")
-    run_on_sprite("mv", "-Tf", f"{SERVICE_ROOT}/incoming.py", f"{SERVICE_ROOT}/app.py")
     platform(service, "PUT", {
-        "cmd": "python3",
-        "args": [f"{SERVICE_ROOT}/app.py", "serve"],
-        "dir": SERVICE_ROOT,
+        "cmd": runtime[0],
+        "args": [*runtime[1:], f"{RELEASE}/app.py", "serve"],
+        "dir": RELEASE,
         "needs": [],
         "http_port": 8080,
-        "env": {
-            "PYTHONPATH": dependencies,
-            "REACALCUL_DB": "/home/sprite/reacalcul-data/reacalcul.sqlite",
-        },
     })
     platform(service + "/restart", "POST")
     platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})
-    verify(url)
+    try:
+        verify(url)
+    except Exception:
+        try:
+            print(platform(service + "/logs?lines=12").decode(errors="replace")[-6000:])
+        except (OSError, RuntimeError) as error:
+            print(f"Could not retrieve Sprite service logs: {type(error).__name__}")
+        raise
     print(f"Public demo: {url}")
 
 
