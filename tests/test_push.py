@@ -85,6 +85,21 @@ class PushTest(unittest.TestCase):
             sessions = connection.execute("SELECT session FROM push_deliveries").fetchall()
             self.assertEqual([row[0] for row in sessions], ["newly-covered"])
 
+    def test_ambiguous_prior_scope_needs_review_instead_of_an_alert(self):
+        for prior_models in (["EFMIS121"], []):
+            with self.subTest(prior_models=prior_models), app.database() as connection:
+                connection.execute("DELETE FROM checks")
+                connection.execute("DELETE FROM feed_state")
+                connection.execute("DELETE FROM feed_changes")
+                self.save(connection, "watching", "A2210")
+                prior = {**self.january, "models": prior_models, "ranges": {}, "fingerprint": "ambiguous"}
+                app.record_feed(connection, [self.july, prior], self.now - 1)
+                app.record_feed(connection, [self.july, self.january], self.now)
+                self.assertEqual(connection.execute("SELECT count(*) FROM push_deliveries").fetchone()[0], 0)
+                review = app.matching_change(connection, "EFMIS121", "A2210", self.now - 1)
+                self.assertIn("confirm previous coverage", review["summary"])
+                self.assertEqual(review["source"], self.january["source"])
+
     def test_web_push_envelope_decrypts(self):
         with app.database() as connection:
             saved_key = watch_push.public_key(connection)

@@ -1,42 +1,80 @@
-# reacalcul
+# Reacalcul
 
-**Same fridge. New answer.** reacalcul is a personal recall watch that remembers your Frigidaire model and serial, checks official CPSC updates, and sends a device notification if a notice starts covering your exact label.
+**A recall can change after you check it. Reacalcul remembers your fridge’s exact serial and alerts you if a later CPSC notice adds it.**
 
-[Try the public Fly Sprite](https://reacalcul-b623b.sprites.app) · [Deployment runs](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml)
+[![Deploy to Fly Sprites](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml) [![MIT License](https://img.shields.io/badge/license-MIT-286247)](LICENSE)
 
-## Judge walkthrough
+| Open | What you can verify |
+|---|---|
+| [Live recall replay](https://reacalcul-b623b.sprites.app/?alert=example) | Compare two serials on the same model, then send a real example to your device. |
+| [90-second walkthrough and submission copy](DEMO.md) | The alert, the exact rule that triggered it, and the serial that stays outside. |
+| [Live Sprite health](https://reacalcul-b623b.sprites.app/healthz) · [Deployment runs](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml) | The release SHA and the CPSC connector import. |
+| [Fly.io Hacksgiving 2026](https://fly.io/hacksgiving/) | Personal agent on Sprites with a connector. Targeting the $2,500 Grand Prize. |
 
-1. Select **Replay a real recall**. On the same model, **EFMIS121 / A2210** became newly covered and **A2401** stayed outside the range.
-2. Select **Send example to this device** and allow notifications. The historical example goes through the same encrypted Web Push delivery as the live watch. Open it for the quoted rule and official refund instructions.
-3. To start a live watch, save a fridge label and select **Enable device alerts**. This browser stays subscribed when the tab closes. The replay leaves the live watch untouched.
+## What did you build?
 
-The notices, product photo, and approximately **330,000 additional units** are real. The two serial values are illustrative. The one-click sample leaves your saved label untouched.
+The January 2026 Frigidaire recall expansion added about **330,000 minifridges**. An owner who checked the July notice could have an old answer for the same fridge. Reacalcul keeps the label, checks the CPSC feed, and sends an opt-in device notification when an official change newly covers that exact serial. The alert opens the source and the manufacturer's refund instructions when the notice provides them. [July 2025 notice](https://www.cpsc.gov/Recalls/2025/Curtis-International-Recalls-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards-More-Than-700-000-Reported-in-Property-Damage) · [January 2026 expansion](https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards)
 
-[July CPSC notice](https://www.cpsc.gov/Recalls/2025/Curtis-International-Recalls-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards-More-Than-700-000-Reported-in-Property-Damage) · [January expansion](https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards)
+## Try it in 30 seconds
 
-## What runs
+1. [Open the replay](https://reacalcul-b623b.sprites.app/?alert=example). Model `EFMIS121`, serial `A2210`, becomes newly covered. On the same model, `A2401` falls outside the January range.
+2. Select **Send example to this device** and allow notifications. The historical sample goes through the same encrypted Web Push transport as a live alert. Open it to see the CPSC quote and refund link.
+3. To start a live watch, save your own label and select **Enable device alerts**. The browser keeps its subscription after the tab closes.
 
-- **Saved label and replay.** SQLite stores each browser's appliance and the notice it has already seen. Replaying twice does not record a second change.
-- **Source-backed evidence.** A Sprites Custom API connector reads the official CPSC feed. The service uses exact model and serial rules for the two historical notices and uses the official text in the decision receipt.
-- **Scheduled watch and opt-in device alerts.** GitHub Actions wakes the Sprite hourly. It refreshes the official feed about once a day and retries queued deliveries. An alert is queued only when a supported serial goes from outside the known ranges to inside one. The first scan establishes the baseline. Ambiguous notice formats link to the official source for review.
-- **Delivery and privacy.** SQLite keeps opt-in subscriptions, the signing key, and the delivery queue on the Sprite across deployments. No account or email address is needed. A browser with Web Push is required. On iOS or iPadOS, add the site to the Home Screen and open it there.
-- **Low-cost hosting.** The Sprite can sleep between requests. The app uses the public CPSC data and has no model API charges. The historical replay is available from its verified snapshot when the feed is unavailable.
+## How it works
 
-The watch covers this U.S. Curtis International Frigidaire recall series. The browser also shows the last successful scan and the latest accepted alert. The January expansion page links to the original notice dated July 24, 2025, even though its unit-count note says July 2024.
+```mermaid
+flowchart LR
+    A[GitHub Actions] -->|Wakes the watch| B[Fly Sprite]
+    B -->|Fetches notices| C[Sprites Custom API connector]
+    C --> D[Official CPSC feed]
+    B --> E[SQLite labels, prior notices, and alert queue]
+    E -->|Confirmed new match and device opt-in| F[Encrypted Web Push]
+    F --> G[Owner device]
+```
+
+| Integration | What it does and where to check |
+|---|---|
+| Fly.io Sprites | Hosts the app and keeps saved labels, the last feed snapshot, and the delivery queue across releases. [Deploy script](scripts/deploy.py) |
+| Sprites Custom API connector | Imports the official notice identities during deploy and fetches the live CPSC feed for subsequent scans. [Live health](https://reacalcul-b623b.sprites.app/healthz) · [Feed import and watch](app.py) |
+| Web Push | Delivers the labeled example and real alerts through the same encrypted transport. [Sender](watch_push.py) · [Browser worker](sw.js) |
+
+## When an alert can fire
+
+| Decision | Evidence |
+|---|---|
+| The saved `EFMIS121 / A2210` becomes eligible when the range `A2001–A2310` appears. `A2401` stays outside. | [Live replay](https://reacalcul-b623b.sprites.app/?alert=example) · [Delivery and retry test](tests/test_push.py) |
+| A saved label receives alerts after device opt-in. A serial already covered by the previous feed receives no new alert. | [Queue logic](watch_push.py) · [Same-notice edit test](tests/test_push.py) |
+| When the previous scope is ambiguous, the watch links to the official notice for review. A later parsed range alone is insufficient to send a newly-covered alert. | [Ambiguous-scope regression test](tests/test_push.py) |
+
+## Reproduce the evidence
+
+| Check | Evidence | Command |
+|---|---|---|
+| Live replay and connector | 3/3 calls per serial reproduced the two outcomes, the exact CPSC quote, and the sample refund link. The replay left the watch empty. | `python3 scripts/verify_demo.py` |
+| Matching and delivery | Six automated tests cover saved-label matching, duplicate suppression, retry, ambiguous prior scope, and decryption of the Web Push payload. | `python3 -m unittest discover -s tests -v` |
+
+The live verifier uses the Python standard library. It prints the median and maximum of six API round trips from the machine running it. Device notification timing depends on the browser and its push provider.
+
+## Scope and limitations
+
+- The live watch covers the U.S. Curtis International Frigidaire minifridge recall series. It stores one model and serial per browser. The historical sample labels are illustrative. The CPSC notices and January unit count are real.
+- The first successful scan establishes the baseline. The hourly job wakes the Sprite to check for queued work, and the official feed is fetched on roughly a daily cadence. New formats can require manual review. The official notice is the source of truth for coverage and remedies.
+- Device alerts require browser permission and a Web Push-capable browser. On iOS or iPadOS, open the site from the Home Screen. A signed example can be sent without enrolling a live watch.
 
 ## Run locally
 
-Use Python 3.10+. Install dependencies with `python3 -m pip install -r requirements.txt`, then run `python3 app.py`. Open `http://localhost:8080`. The repository includes a snapshot of the two public notices for the local replay.
+Use Python 3.10 or later. The bundled CPSC snapshot lets you reproduce the historical comparison without credentials.
 
-## GitHub-to-Fly deployment
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+python3 app.py
+```
 
-The deploy workflow runs on pushes to `main` and manual dispatch. Configure these repository settings:
-
-- `SPRITES_TOKEN` secret for a Sprites organization token.
-- `WATCH_REFRESH_KEY` secret for a randomly generated 32-byte URL-safe key shared with the scheduled workflow.
-- `CPSC_CONNECTOR_URL` variable for the Sprites Custom API gateway base URL. Point the connector to `https://www.saferproducts.gov` with `/RestWebServices/Recall` allowed for the `reacalcul` Sprite.
-
-GitHub Actions imports verified notice data on the Sprite before activating the release. It then checks the exact public commit, both serial outcomes, replay deduplication, browser session isolation, and scheduled feed authorization. If verification fails after switching, the workflow restores and checks the previous release. Saved labels and the feed snapshot live outside each release directory.
+Open `http://localhost:8080`. The [deployment workflow](.github/workflows/deploy.yml) packages the tested dependencies for the Sprite, initializes the database, and checks the public revision. It can restore the previous release if verification fails. An independent deployment uses `SPRITES_TOKEN` and `WATCH_REFRESH_KEY` as Actions secrets and `CPSC_CONNECTOR_URL` for the Sprites Custom API gateway.
 
 ## License
 

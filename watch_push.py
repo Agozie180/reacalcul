@@ -153,9 +153,14 @@ def notification(model, serial, notice, *, example=False):
     }
 
 
-def covers(notice, model, serial):
+def coverage(notice, model, serial):
     bounds = notice["ranges"].get(model)
-    return bool(bounds and bounds[0] <= serial <= bounds[1])
+    if bounds:
+        return bounds[0] <= serial <= bounds[1]
+    models = notice["models"]
+    if not models or model in models:
+        return None
+    return False
 
 
 def queue_changes(connection, previous, current, checked_at):
@@ -169,10 +174,10 @@ def queue_changes(connection, previous, current, checked_at):
         session, model, serial = row
         if not re.fullmatch(r"A[0-9]{4}", serial):
             continue
-        if any(covers(notice, model, serial) for notice in previous):
+        if any(coverage(notice, model, serial) is not False for notice in previous):
             continue
         for notice in current:
-            if not covers(notice, model, serial):
+            if coverage(notice, model, serial) is not True:
                 continue
             event = f"{notice['id']}:{notice['fingerprint']}:{model}:{serial}"
             connection.execute("""

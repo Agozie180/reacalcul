@@ -332,7 +332,10 @@ def matching_change(connection, model, serial, saved_at):
             result["before_range"] = before_range
             result["after_range"] = after_range
             if after_range and RANGE_SERIAL.fullmatch(serial) and after_range[0] <= serial <= after_range[1]:
-                if not before_range or not before_range[0] <= serial <= before_range[1]:
+                previous_coverage = watch_push.coverage(before, model, serial) if before else False
+                if previous_coverage is None:
+                    result["summary"] = "The revised range includes your code. Review the official notice to confirm previous coverage."
+                elif previous_coverage is False:
                     result["summary"] = "Your saved code falls in a newly listed range. Review the full official notice."
                 else:
                     result["summary"] = "Your saved code remains in the revised range. Review the full official notice."
