@@ -7,7 +7,7 @@
 | Open | What you can verify |
 |---|---|
 | [Live recall replay](https://reacalcul-b623b.sprites.app/?alert=example) | Compare two serials on the same model, then send a real example to your device. |
-| [90-second walkthrough and submission copy](DEMO.md) | The alert, the exact rule that triggered it, and the serial that stays outside. |
+| [90-second demo video](https://github.com/Agozie180/reacalcul/releases/download/hacksgiving-2026/reacalcul-hacksgiving-demo.mp4) · [Walkthrough and submission copy](DEMO.md) | The delivery receipt, the exact rule that triggered it, and the serial that stays outside. |
 | [Live Sprite health](https://reacalcul-b623b.sprites.app/healthz) · [Deployment runs](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml) | The release SHA and the CPSC connector import. |
 | [Fly.io Hacksgiving 2026](https://fly.io/hacksgiving/) | Personal agent on Sprites with a connector. Targeting the $2,500 Grand Prize. |
 
@@ -54,7 +54,7 @@ flowchart LR
 | Live replay and connector | 3/3 calls per serial reproduced the two outcomes, the exact CPSC quote, and the sample refund link. The replay left the watch empty. | `python3 scripts/verify_demo.py` |
 | Matching and delivery | Six automated tests cover saved-label matching, duplicate suppression, retry, ambiguous prior scope, and decryption of the Web Push payload. | `python3 -m unittest discover -s tests -v` |
 
-The live verifier uses the Python standard library. It prints the median and maximum of six API round trips from the machine running it. Device notification timing depends on the browser and its push provider.
+The live verifier uses the Python standard library. One six-call run measured a **0.52 s median** and a **0.83 s maximum** for replay API round trips. The script prints the timings for your machine. Device notification delivery has its own browser and push-provider latency.
 
 ## Scope and limitations
 

@@ -1,5 +1,7 @@
 # Reacalcul · 90-second Hacksgiving walkthrough
 
+[Download the captioned walkthrough](https://github.com/Agozie180/reacalcul/releases/download/hacksgiving-2026/reacalcul-hacksgiving-demo.mp4) · [Open the live replay](https://reacalcul-b623b.sprites.app/?alert=example)
+
 **Opening line**
 
 > Same fridge. New answer. A recall can change after you check it, and Reacalcul tells you when an official update adds your exact serial.
@@ -28,7 +30,7 @@ Test device permission and the notification before recording. Open a fresh brows
 | Item | Link |
 |---|---|
 | Code | [GitHub](https://github.com/Agozie180/reacalcul) |
-| Demo | [Public Fly Sprite](https://reacalcul-b623b.sprites.app/?alert=example) |
+| Demo | [Public Fly Sprite](https://reacalcul-b623b.sprites.app/?alert=example) · [Captioned video](https://github.com/Agozie180/reacalcul/releases/download/hacksgiving-2026/reacalcul-hacksgiving-demo.mp4) |
 | Entry | [Official submission form](https://docs.google.com/forms/d/e/1FAIpQLSfZ_xearoDOSRXI3VjAbM4BJlObUdxSFO0SDwyZ8G6M2lapRQ/viewform) |
 | Rules and deadline | [Hacksgiving](https://fly.io/hacksgiving/) · November 29, 2026, before midnight PST |
 
