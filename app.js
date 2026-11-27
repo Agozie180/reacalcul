@@ -33,7 +33,7 @@ function entry(notice, result, newlyCovered = false) {
   if (result) {
     const number = notice === notices.baseline ? noticeNumbers.baseline : noticeNumbers.expansion;
     item.append(link(result.source, "CPSC notice " + number + " ↗"));
-    if (result.status === "covered") {
+    if (result.status === "covered" && !newlyCovered) {
       item.append(node("br"));
       const refund = link("https://www.recallrtr.com/minifridge", "Open official refund instructions ↗", "remedy");
       item.append(refund);
@@ -95,7 +95,9 @@ function renderProof(data) {
         message("Clipboard unavailable. The official source links are below.", true);
       }
     });
-    proof.append(copy);
+    const actions = node("div", "", "proof-actions");
+    actions.append(copy, link("https://www.recallrtr.com/minifridge", "Open official refund instructions ↗"));
+    proof.append(actions);
   }
 }
 
@@ -132,7 +134,13 @@ async function run(button, path, payload, success) {
   try {
     message(button === live ? "Checking the official CPSC feed…" : "");
     const result = await api(path, payload);
-    if (result.appliance) render(result);
+    if (result.appliance) {
+      render(result);
+      if (matchMedia("(max-width: 780px)").matches) {
+        const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+        byId("history-panel").scrollIntoView({ block: "start", behavior });
+      }
+    }
     if (success) success(result);
   } catch (error) {
     message(error.message, true);
