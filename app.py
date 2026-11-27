@@ -354,6 +354,18 @@ def watch_status(connection, model, serial, saved_at):
     change = matching_change(connection, model, serial, saved_at)
     if change:
         result.update(change)
+    elif RANGE_SERIAL.fullmatch(serial):
+        for notice in json.loads(snapshot["records"]):
+            if not notice.get("ranges") or watch_push.coverage(notice, model, serial) is not True:
+                continue
+            start, end = notice["ranges"][model]
+            result.update({
+                "summary": f"The latest CPSC scan lists your code in the {start}–{end} recall range.",
+                "source": notice["source"],
+                "title": notice["title"],
+                "remedy": notice.get("remedy"),
+            })
+            break
     return result
 
 
