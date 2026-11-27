@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
@@ -19,6 +19,8 @@ REVISION = os.environ["GITHUB_SHA"]
 SOURCE = Path(__file__).resolve().parents[1]
 DATABASE = "/home/sprite/reacalcul-data/reacalcul.sqlite"
 SERVICE_ROOT = "/home/sprite/reacalcul"
+ENTRYPOINT = f"{SERVICE_ROOT}/app.py"
+SERVICE = f"{SPRITE}/services/web"
 FILES = ("app.py", "index.html", "app.css", "app.js", "sw.js", "manifest.webmanifest", "cpsc-notices.json", "watch_push.py", "requirements.txt")
 
 if not TOKEN or not re.fullmatch(r"[0-9a-f]{40}", REVISION):
@@ -29,9 +31,11 @@ if not re.fullmatch(r"https://api\.sprites\.dev/v1/gateway/custom_api/[A-Za-z0-9
 if not re.fullmatch(r"[A-Za-z0-9_-]{43}", WATCH_KEY):
     raise SystemExit("Set WATCH_REFRESH_KEY to a random 32-byte URL-safe key.")
 
-RELEASE = f"/home/sprite/reacalcul-releases/{REVISION}"
+RELEASES = "/home/sprite/reacalcul-releases"
+RELEASE = f"{RELEASES}/{REVISION}"
 
-def platform(path, method="GET", payload=None, *, raw=None):
+
+def platform(path, method="GET", payload=None, *, raw=None, timeout=100):
     headers = {"Authorization": f"Bearer {TOKEN}"}
     data = None
     if payload is not None:
@@ -41,7 +45,7 @@ def platform(path, method="GET", payload=None, *, raw=None):
         headers["Content-Type"] = "application/octet-stream"
         data = raw
     try:
-        with urlopen(Request(API + path, data=data, headers=headers, method=method), timeout=100) as response:
+        with urlopen(Request(API + path, data=data, headers=headers, method=method), timeout=timeout) as response:
             return response.read()
     except HTTPError as error:
         raise RuntimeError(f"Sprites {method} {path.split('?')[0]} returned HTTP {error.code}") from None
@@ -59,9 +63,43 @@ def upload(name):
 def run_on_sprite(*args):
     query = urlencode([("cmd", part) for part in args])
     response = platform(f"{SPRITE}/exec?{query}", "POST")
+    output = response[:-2].replace(bytes((1,)), b"").replace(bytes((2,)), b"").decode(errors="replace")
     if len(response) < 2 or response[-2:] != bytes((3, 0)):
-        output = response[:-2].replace(bytes((1,)), b"").replace(bytes((2,)), b"")
-        raise RuntimeError("Sprite command failed: " + output.decode(errors="replace")[-1600:])
+        raise RuntimeError("Sprite command failed: " + output[-1600:])
+    return output
+
+
+def previous_entrypoint():
+    target = run_on_sprite(
+        "python3", "-c",
+        "from pathlib import Path; import sys; p = Path(sys.argv[1]); print(p.resolve() if p.is_symlink() else '')",
+        ENTRYPOINT,
+    ).strip()
+    if re.fullmatch(rf"{re.escape(RELEASES)}/[a-f0-9]{{40}}/app\.py", target):
+        return target
+    return None
+
+
+def switch_entrypoint(target):
+    incoming = f"{SERVICE_ROOT}/incoming.py"
+    run_on_sprite("ln", "-sfn", target, incoming)
+    run_on_sprite("mv", "-Tf", incoming, ENTRYPOINT)
+
+
+def ensure_service():
+    try:
+        platform(SERVICE)
+    except RuntimeError as error:
+        if not str(error).endswith("HTTP 404"):
+            raise
+        platform(SERVICE, "PUT", {
+            "cmd": "python3",
+            "args": [ENTRYPOINT, "serve"],
+            "dir": SERVICE_ROOT,
+            "needs": [],
+            "http_port": 8080,
+            "env": {"REACALCUL_DB": DATABASE},
+        })
 
 
 def public_json(opener, base_url, path, payload=None, *, headers=None, timeout=18):
@@ -71,19 +109,24 @@ def public_json(opener, base_url, path, payload=None, *, headers=None, timeout=1
         return json.load(response)
 
 
+def verify_health(opener, url, revision):
+    expected = {"ok": True, "connector_verified": True, "revision": revision}
+    last_result = "no response"
+    for attempt in range(8):
+        try:
+            last_result = public_json(opener, url, "/healthz", timeout=6)
+            if last_result == expected:
+                return
+        except (URLError, TimeoutError, ValueError) as error:
+            last_result = str(error)
+        if attempt < 7:
+            time.sleep(5)
+    raise RuntimeError(f"Release {revision} did not pass the public health check: {last_result}")
+
+
 def verify(url):
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    last_health = {}
-    for _ in range(8):
-        try:
-            last_health = public_json(opener, url, "/healthz", timeout=6)
-            if last_health == {"ok": True, "connector_verified": True, "revision": REVISION}:
-                break
-        except (URLError, TimeoutError, ValueError):
-            pass
-        time.sleep(5)
-    else:
-        raise RuntimeError(f"Release did not pass the public health check: {last_health}")
+    verify_health(opener, url, REVISION)
     demo = public_json(opener, url, "/api/demo", {})
     assert demo["change"] == "newly_covered"
     assert demo["preview"] and demo["control"]["status"] == "outside_serial"
@@ -133,7 +176,7 @@ def verify(url):
     refresh = public_json(opener, url, "/api/feed/refresh", {}, headers={"Authorization": f"Bearer {WATCH_KEY}"})
     live = public_json(opener, url, "/api/live", {})
     assert refresh["checked_at"] and live["checked_at"]
-    print("Verified the release, connector import, replay deduplication, both outcomes, session isolation, and scheduled feed authorization, and the public Web Push demo and worker.")
+    print("Verified the release, connector import, replay deduplication, both outcomes, session isolation, scheduled feed authorization, and the public Web Push demo and worker.")
 
 
 def main():
@@ -158,29 +201,37 @@ def main():
     run_on_sprite("python3", f"{RELEASE}/app.py", "import")
     run_on_sprite("python3", f"{RELEASE}/app.py", "check")
     print("Connector import and database initialization succeeded on the Sprite.", flush=True)
-    service = f"{SPRITE}/services/web"
+    activate(url)
+    print(f"Public demo: {url}")
+
+
+def activate(url):
     run_on_sprite("mkdir", "-p", SERVICE_ROOT)
-    run_on_sprite("ln", "-sfn", f"{RELEASE}/app.py", f"{SERVICE_ROOT}/incoming.py")
-    run_on_sprite("mv", "-Tf", f"{SERVICE_ROOT}/incoming.py", f"{SERVICE_ROOT}/app.py")
+    previous = previous_entrypoint()
+    candidate = f"{RELEASE}/app.py"
+    switch_entrypoint(candidate)
     try:
-        platform(service, "PUT", {
-            "cmd": "python3",
-            "args": [f"{SERVICE_ROOT}/app.py", "serve"],
-            "dir": SERVICE_ROOT,
-            "needs": [],
-            "http_port": 8080,
-            "env": {"REACALCUL_DB": DATABASE},
-        })
-        platform(service + "/restart", "POST")
+        ensure_service()
+        platform(SERVICE + "/restart", "POST")
         platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})
         verify(url)
     except Exception:
         try:
-            print(platform(service + "/logs?lines=12").decode(errors="replace")[-6000:])
+            print(platform(SERVICE + "/logs?lines=12", timeout=5).decode(errors="replace")[-6000:], flush=True)
         except (OSError, RuntimeError) as error:
-            print(f"Could not retrieve Sprite service logs: {type(error).__name__}")
+            print(f"Could not retrieve Sprite service logs: {type(error).__name__}", flush=True)
+        if previous and previous != candidate:
+            revision = PurePosixPath(previous).parent.name
+            print(f"Restoring last release {revision}.", flush=True)
+            try:
+                switch_entrypoint(previous)
+                platform(SERVICE + "/restart", "POST")
+                verify_health(build_opener(), url, revision)
+            except Exception as rollback_error:
+                print(f"Could not verify rollback: {rollback_error}", flush=True)
+            else:
+                print(f"Restored and verified release {revision}.", flush=True)
         raise
-    print(f"Public demo: {url}")
 
 
 if __name__ == "__main__":

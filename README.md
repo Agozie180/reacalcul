@@ -36,4 +36,8 @@ The deploy workflow runs on pushes to `main` and manual dispatch. Configure thes
 - `WATCH_REFRESH_KEY` secret for a randomly generated 32-byte URL-safe key shared with the scheduled workflow.
 - `CPSC_CONNECTOR_URL` variable for the Sprites Custom API gateway base URL. Point the connector to `https://www.saferproducts.gov` with `/RestWebServices/Recall` allowed for the `reacalcul` Sprite.
 
-GitHub Actions imports verified notice data on the Sprite before activating the release. It then checks the exact public commit, both serial outcomes, replay deduplication, browser session isolation, and scheduled feed authorization. Storage for saved labels and the last feed scan lives outside the release directory.
+GitHub Actions imports verified notice data on the Sprite before activating the release. It then checks the exact public commit, both serial outcomes, replay deduplication, browser session isolation, and scheduled feed authorization. If verification fails after switching, the workflow restores and checks the previous release. Saved labels and the feed snapshot live outside each release directory.
+
+## License
+
+The project code is available under the [MIT License](LICENSE). The recall notices and product photo come from the [U.S. Consumer Product Safety Commission](https://www.cpsc.gov/Recalls).
