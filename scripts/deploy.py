@@ -24,6 +24,7 @@ if not re.fullmatch(r"https://api\.sprites\.dev/v1/gateway/custom_api/[A-Za-z0-9
     raise SystemExit("Set CPSC_CONNECTOR_URL to the CPSC Custom API gateway base URL.")
 
 RELEASE = f"/home/sprite/reacalcul-releases/{REVISION}"
+SERVICE_ROOT = "/home/sprite/reacalcul"
 
 
 def platform(path, method="GET", payload=None, *, raw=None):
@@ -42,9 +43,13 @@ def platform(path, method="GET", payload=None, *, raw=None):
         raise RuntimeError(f"Sprites {method} {path.split('?')[0]} returned HTTP {error.code}") from None
 
 
-def upload(name):
+def upload_bytes(name, data):
     query = urlencode({"path": name, "workingDir": RELEASE, "mkdir": "true", "mode": "0644"})
-    platform(f"{SPRITE}/fs/write?{query}", "PUT", raw=(SOURCE / name).read_bytes())
+    platform(f"{SPRITE}/fs/write?{query}", "PUT", raw=data)
+
+
+def upload(name):
+    upload_bytes(name, (SOURCE / name).read_bytes())
 
 
 def run_on_sprite(*args):
@@ -103,19 +108,20 @@ def main():
         raise RuntimeError("Sprites returned an unexpected public URL.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         list(pool.map(upload, FILES))
-    run_on_sprite("env", f"REACALCUL_CPSC_CONNECTOR_URL={CONNECTOR}", "python3", f"{RELEASE}/app.py", "import")
+    config = json.dumps({"connector": CONNECTOR, "revision": REVISION}).encode()
+    upload_bytes("release.json", config)
+    run_on_sprite("python3", f"{RELEASE}/app.py", "import")
     service = f"{SPRITE}/services/web"
+    run_on_sprite("mkdir", "-p", SERVICE_ROOT)
+    run_on_sprite("ln", "-sfn", f"{RELEASE}/app.py", f"{SERVICE_ROOT}/incoming.py")
+    run_on_sprite("mv", "-Tf", f"{SERVICE_ROOT}/incoming.py", f"{SERVICE_ROOT}/app.py")
     platform(service, "PUT", {
         "cmd": "python3",
-        "args": [f"{RELEASE}/app.py", "serve"],
-        "dir": RELEASE,
+        "args": [f"{SERVICE_ROOT}/app.py", "serve"],
+        "dir": SERVICE_ROOT,
         "needs": [],
         "http_port": 8080,
-        "env": {
-            "REACALCUL_DB": "/home/sprite/reacalcul-data/reacalcul.sqlite",
-            "REACALCUL_CPSC_CONNECTOR_URL": CONNECTOR,
-            "REACALCUL_REVISION": REVISION,
-        },
+        "env": {"REACALCUL_DB": "/home/sprite/reacalcul-data/reacalcul.sqlite"},
     })
     platform(service + "/restart", "POST")
     platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})

@@ -17,7 +17,9 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ.get("REACALCUL_DB", ROOT / "reacalcul.sqlite"))
-CPSC_CONNECTOR = os.environ.get("REACALCUL_CPSC_CONNECTOR_URL", "")
+RELEASE_CONFIG = ROOT / "release.json"
+RELEASE = json.loads(RELEASE_CONFIG.read_text(encoding="utf-8")) if RELEASE_CONFIG.exists() else {}
+CPSC_CONNECTOR = os.environ.get("REACALCUL_CPSC_CONNECTOR_URL", RELEASE.get("connector", ""))
 FEED_BASE = CPSC_CONNECTOR.rstrip("/") or "https://www.saferproducts.gov"
 API = FEED_BASE + "/RestWebServices/Recall?" + urlencode({
     "format": "json", "RecallTitle": "Curtis International", "RecallDateStart": "2025-01-01",
@@ -34,7 +36,7 @@ SERIAL = re.compile(r"[A-Z0-9][A-Z0-9-]{0,31}")
 RANGE_SERIAL = re.compile(r"A[0-9]{4}")
 MAX_BODY = 2048
 MAX_SOURCE = 1_000_000
-REVISION = os.environ.get("REACALCUL_REVISION", "local")
+REVISION = RELEASE.get("revision", "local")
 SOURCE_TIMEOUT = 12
 LIVE_INTERVAL = 300
 LIVE_LOCK = threading.Lock()
