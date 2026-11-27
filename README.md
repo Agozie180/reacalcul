@@ -7,6 +7,7 @@
 | Open | What you can verify |
 |---|---|
 | [Live recall replay](https://reacalcul-b623b.sprites.app/?alert=example) | Compare two serials on the same model, then send a real example to your device. |
+| [Run locally as a judge](judge.md) | Copy-paste setup for Windows, macOS, and Linux, with a screenshot of the expected result. |
 | [90-second demo video](https://github.com/Agozie180/reacalcul/releases/download/hacksgiving-2026/reacalcul-hacksgiving-demo.mp4) · [Walkthrough and submission copy](DEMO.md) | The delivery receipt, the exact rule that triggered it, and the serial that stays outside. |
 | [Live Sprite health](https://reacalcul-b623b.sprites.app/healthz) · [Deployment runs](https://github.com/Agozie180/reacalcul/actions/workflows/deploy.yml) | The release SHA and the CPSC connector import. |
 | [Fly.io Hacksgiving 2026](https://fly.io/hacksgiving/) | Personal agent on Sprites with a connector. Targeting the $2,500 Grand Prize. |
