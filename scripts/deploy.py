@@ -18,6 +18,7 @@ WATCH_KEY = os.environ["WATCH_REFRESH_KEY"]
 REVISION = os.environ["GITHUB_SHA"]
 SOURCE = Path(__file__).resolve().parents[1]
 DATABASE = "/home/sprite/reacalcul-data/reacalcul.sqlite"
+SERVICE_ROOT = "/home/sprite/reacalcul"
 FILES = ("app.py", "index.html", "app.css", "app.js", "sw.js", "manifest.webmanifest", "cpsc-notices.json", "watch_push.py", "requirements.txt")
 
 if not TOKEN or not re.fullmatch(r"[0-9a-f]{40}", REVISION):
@@ -147,28 +148,31 @@ def main():
         raise RuntimeError("Sprites returned an unexpected public URL.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         list(pool.map(upload, FILES))
-    config = json.dumps({"connector": CONNECTOR, "revision": REVISION, "watch_key": WATCH_KEY}).encode()
+    config = json.dumps({"connector": CONNECTOR, "revision": REVISION, "watch_key": WATCH_KEY, "database": DATABASE}).encode()
     upload_bytes("release.json", config, "0600")
     dependencies = f"{RELEASE}/deps"
     print("Uploading the tested Linux dependencies.", flush=True)
     upload_bytes("deps.tar.gz", Path(os.environ["PUSH_DEPENDENCIES"]).read_bytes())
     run_on_sprite("mkdir", "-p", dependencies)
     run_on_sprite("tar", "-xzf", f"{RELEASE}/deps.tar.gz", "-C", dependencies)
-    runtime = ("/usr/bin/env", f"PYTHONPATH={RELEASE}:{dependencies}", f"REACALCUL_DB={DATABASE}", "python3")
-    run_on_sprite(*runtime, f"{RELEASE}/app.py", "import")
-    run_on_sprite(*runtime, "-c", "import app; app.init_db(); app.load_replay()")
+    run_on_sprite("python3", f"{RELEASE}/app.py", "import")
+    run_on_sprite("python3", f"{RELEASE}/app.py", "check")
     print("Connector import and database initialization succeeded on the Sprite.", flush=True)
     service = f"{SPRITE}/services/web"
-    platform(service, "PUT", {
-        "cmd": runtime[0],
-        "args": [*runtime[1:], f"{RELEASE}/app.py", "serve"],
-        "dir": RELEASE,
-        "needs": [],
-        "http_port": 8080,
-    })
-    platform(service + "/restart", "POST")
-    platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})
+    run_on_sprite("mkdir", "-p", SERVICE_ROOT)
+    run_on_sprite("ln", "-sfn", f"{RELEASE}/app.py", f"{SERVICE_ROOT}/incoming.py")
+    run_on_sprite("mv", "-Tf", f"{SERVICE_ROOT}/incoming.py", f"{SERVICE_ROOT}/app.py")
     try:
+        platform(service, "PUT", {
+            "cmd": "python3",
+            "args": [f"{SERVICE_ROOT}/app.py", "serve"],
+            "dir": SERVICE_ROOT,
+            "needs": [],
+            "http_port": 8080,
+            "env": {"REACALCUL_DB": DATABASE},
+        })
+        platform(service + "/restart", "POST")
+        platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})
         verify(url)
     except Exception:
         try:

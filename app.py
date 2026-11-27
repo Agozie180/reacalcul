@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -16,12 +17,16 @@ from urllib.error import URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+ROOT = Path(__file__).resolve().parent
+DEPENDENCIES = ROOT / "deps"
+if DEPENDENCIES.is_dir():
+    sys.path.insert(0, str(DEPENDENCIES))
+
 import watch_push
 
-ROOT = Path(__file__).resolve().parent
-DB = Path(os.environ.get("REACALCUL_DB", ROOT / "reacalcul.sqlite"))
 RELEASE_CONFIG = ROOT / "release.json"
 RELEASE = json.loads(RELEASE_CONFIG.read_text(encoding="utf-8")) if RELEASE_CONFIG.exists() else {}
+DB = Path(os.environ.get("REACALCUL_DB", RELEASE.get("database", ROOT / "reacalcul.sqlite")))
 CPSC_CONNECTOR = os.environ.get("REACALCUL_CPSC_CONNECTOR_URL", RELEASE.get("connector", ""))
 FEED_BASE = CPSC_CONNECTOR.rstrip("/") or "https://www.saferproducts.gov"
 API = FEED_BASE + "/RestWebServices/Recall?" + urlencode({
@@ -589,7 +594,7 @@ def import_replay():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("serve", "import"), nargs="?", default="serve")
+    parser.add_argument("command", choices=("serve", "import", "check"), nargs="?", default="serve")
     arguments = parser.parse_args()
     if arguments.command == "import":
         if not CPSC_CONNECTOR:
@@ -598,5 +603,6 @@ if __name__ == "__main__":
     else:
         REPLAY = load_replay()
         init_db()
-        port = int(os.environ.get("PORT", "8080"))
-        ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+        if arguments.command == "serve":
+            port = int(os.environ.get("PORT", "8080"))
+            ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
