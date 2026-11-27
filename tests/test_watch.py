@@ -39,6 +39,20 @@ class WatchTest(unittest.TestCase):
             self.assertIn("newly listed range", app.matching_change(connection, "EFMIS121", "A2210", 450)["summary"])
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM feed_changes").fetchone()[0], 2)
 
+    def test_saved_after_expansion_sees_current_coverage(self):
+        expanded = dict(self.source, Description=self.source["Description"].replace("A2310", "A2420"))
+        notice = app.feed_record(expanded)
+        with app.database() as connection:
+            app.record_feed(connection, [app.feed_record(self.source)], 100)
+            app.record_feed(connection, [notice], 200)
+            watch = app.watch_status(connection, "EFMIS121", "A2401", 210)
+            self.assertIn("A2001", watch["summary"])
+            self.assertIn("A2420", watch["summary"])
+            self.assertEqual(watch["source"], notice["source"])
+            self.assertEqual(watch["remedy"], notice["remedy"])
+            outside = app.watch_status(connection, "EFMIS121", "A2421", 210)
+            self.assertNotIn("source", outside)
+
     def test_new_notice_and_whitespace_normalization(self):
         changed = dict(self.source, RecallNumber="26999", Description=self.source["Description"].replace(" Between ", "  Between   "))
         first = app.feed_record(self.source)
