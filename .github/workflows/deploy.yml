@@ -1,0 +1,27 @@
+name: Deploy to Fly Sprites
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reacalcul-fly
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Publish and verify reacalcul
+        env:
+          SPRITES_TOKEN: ${{ secrets.SPRITES_TOKEN }}
+          CPSC_CONNECTOR_URL: ${{ vars.CPSC_CONNECTOR_URL }}
+        run: python3 scripts/deploy.py

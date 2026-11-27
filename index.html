@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Reacalcul tells you when a recall you already checked starts covering your exact appliance.">
+  <meta name="theme-color" content="#f4f3ee">
+  <title>reacalcul · Recall recheck</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="wordmark" href="/" aria-label="reacalcul home"><span class="mark" aria-hidden="true">⟳</span>reacalcul</a>
+    <a class="header-source" href="https://www.cpsc.gov/Recalls" target="_blank" rel="noopener">Official recall data <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="intro-title">
+      <div>
+        <p class="eyebrow">A recall recheck for your appliance</p>
+        <h1 id="intro-title">You checked once.<br>Then the recall changed.</h1>
+        <p class="lede">Save the model and serial from your fridge’s sticker. Reacalcul remembers your first result and shows exactly why a later notice changes it.</p>
+      </div>
+      <figure class="product">
+        <div class="photo"><img width="379" height="325" src="https://www.cpsc.gov/s3fs-public/Picture4_20.jpg" alt="Red Frigidaire six-can minifridge from the CPSC recall notice"></div>
+        <figcaption>Frigidaire six-can minifridge <a href="https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards" target="_blank" rel="noopener">CPSC photo ↗</a></figcaption>
+      </figure>
+    </section>
+    <section class="workspace" aria-label="Frigidaire recall replay">
+      <div class="panel setup">
+        <div class="kicker">Historical replay <span>2025–2026</span></div>
+        <h2>Fridge sticker</h2>
+        <p class="muted">Use the example below or enter the model and serial from the label on the back.</p>
+        <form id="sticker">
+          <div class="fields">
+            <label for="model">Model <input id="model" name="model" value="EFMIS121" maxlength="24" required spellcheck="false" autocapitalize="characters"></label>
+            <label for="serial">Serial <input id="serial" name="serial" value="A2210" maxlength="32" spellcheck="false" autocapitalize="characters"></label>
+          </div>
+          <div class="controls">
+            <button class="primary" id="check" type="submit">Check July notice <span aria-hidden="true">→</span></button>
+            <button class="quiet" id="sample" type="button">Try A2210</button>
+            <button class="quiet" id="other-sample" type="button">Try A2401</button>
+          </div>
+        </form>
+        <p class="privacy">This replay covers the two linked U.S. Frigidaire notices. Use the official notice for recall instructions.</p>
+      </div>
+      <div class="panel history">
+        <div class="kicker">Recall timeline <span id="progress">Ready to check</span></div>
+        <h2>What changed for you</h2>
+        <div id="results" aria-live="polite">
+          <ol class="timeline">
+            <li class="event pending"><div><span class="date">Jul 24, 2025</span><h3>Initial recall</h3><p>Four model numbers with limited serial ranges.</p></div></li>
+            <li class="event pending"><div><span class="date">Jan 15, 2026</span><h3>Recall expansion</h3><p>About 330,000 more minifridges included.</p></div></li>
+          </ol>
+        </div>
+        <div id="actions" class="controls history-actions" hidden>
+          <button class="primary" id="replay" type="button">Replay January expansion <span aria-hidden="true">→</span></button>
+          <button class="quiet" id="live" type="button" hidden>Check current CPSC records</button>
+        </div>
+        <p class="message" id="message" role="status"></p>
+      </div>
+    </section>
+    <footer><span>reacalcul</span><span>Built for Fly.io Hacksgiving</span><a href="https://www.cpsc.gov/Recalls/CPSC-Recalls-Application-Program-Interface-API-Information" target="_blank" rel="noopener">CPSC data ↗</a></footer>
+  </main>
+</body>
+</html>

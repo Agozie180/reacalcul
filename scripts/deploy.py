@@ -1,0 +1,127 @@
+import concurrent.futures
+import http.cookiejar
+import json
+import os
+import re
+import time
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
+
+API = "https://api.sprites.dev/v1"
+NAME = "reacalcul"
+SPRITE = f"/sprites/{NAME}"
+TOKEN = os.environ["SPRITES_TOKEN"]
+CONNECTOR = os.environ["CPSC_CONNECTOR_URL"]
+REVISION = os.environ["GITHUB_SHA"]
+SOURCE = Path(__file__).resolve().parents[1]
+FILES = ("app.py", "index.html", "app.css", "app.js", "cpsc-notices.json")
+
+if not TOKEN or not re.fullmatch(r"[0-9a-f]{40}", REVISION):
+    raise SystemExit("GitHub deployment needs SPRITES_TOKEN and a valid commit revision.")
+if not re.fullmatch(r"https://api\.sprites\.dev/v1/gateway/custom_api/[A-Za-z0-9_-]+", CONNECTOR):
+    raise SystemExit("Set CPSC_CONNECTOR_URL to the CPSC Custom API gateway base URL.")
+
+RELEASE = f"/home/sprite/reacalcul-releases/{REVISION}"
+
+
+def platform(path, method="GET", payload=None, *, raw=None):
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    data = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode()
+    if raw is not None:
+        headers["Content-Type"] = "application/octet-stream"
+        data = raw
+    try:
+        with urlopen(Request(API + path, data=data, headers=headers, method=method), timeout=100) as response:
+            return response.read()
+    except HTTPError as error:
+        raise RuntimeError(f"Sprites {method} {path.split('?')[0]} returned HTTP {error.code}") from None
+
+
+def upload(name):
+    query = urlencode({"path": name, "workingDir": RELEASE, "mkdir": "true", "mode": "0644"})
+    platform(f"{SPRITE}/fs/write?{query}", "PUT", raw=(SOURCE / name).read_bytes())
+
+
+def run_on_sprite(*args):
+    query = urlencode([("cmd", part) for part in args])
+    response = platform(f"{SPRITE}/exec?{query}", "POST")
+    if len(response) < 2 or response[-2:] != bytes((3, 0)):
+        output = response[:-2].replace(bytes((1,)), b"").replace(bytes((2,)), b"")
+        raise RuntimeError("Sprite command failed: " + output.decode(errors="replace")[-1600:])
+
+
+def public_json(opener, base_url, path, payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = Request(base_url + path, data=data, headers={"Content-Type": "application/json"})
+    with opener.open(req, timeout=18) as response:
+        return json.load(response)
+
+
+def verify(url):
+    opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    last_health = {}
+    for _ in range(12):
+        try:
+            last_health = public_json(opener, url, "/healthz")
+            if last_health == {"ok": True, "connector_verified": True, "revision": REVISION}:
+                break
+        except (URLError, TimeoutError, ValueError):
+            pass
+        time.sleep(5)
+    else:
+        raise RuntimeError(f"Release did not pass the public health check: {last_health}")
+    july = public_json(opener, url, "/api/check", {"model": "EFMIS121", "serial": "A2210"})
+    january = public_json(opener, url, "/api/replay", {})
+    restored = public_json(opener, url, "/api/state")
+    second = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    isolated = public_json(second, url, "/api/state")
+    public_json(second, url, "/api/check", {"model": "EFMIS121", "serial": "A2401"})
+    control = public_json(second, url, "/api/replay", {})
+    assert july["baseline"]["status"] == "outside_model"
+    assert january["newly_covered"] and january["expansion"]["status"] == "covered"
+    assert restored == january and isolated == {}
+    assert control["expansion"]["status"] == "outside_serial" and not control["newly_covered"]
+    live = public_json(opener, url, "/api/live", {})
+    assert live["summary"]
+    print("Verified the public release, connector import, both serial outcomes, and browser session isolation.")
+
+
+def main():
+    try:
+        sprite_info = json.loads(platform(SPRITE))
+    except RuntimeError as error:
+        if not str(error).endswith("HTTP 404"):
+            raise
+        sprite_info = json.loads(platform("/sprites", "POST", {"name": NAME}))
+    url = sprite_info["url"].rstrip("/")
+    if not re.fullmatch(r"https://reacalcul-[A-Za-z0-9-]+\.sprites\.app", url):
+        raise RuntimeError("Sprites returned an unexpected public URL.")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(upload, FILES))
+    run_on_sprite("env", f"REACALCUL_CPSC_CONNECTOR_URL={CONNECTOR}", "python3", f"{RELEASE}/app.py", "import")
+    service = f"{SPRITE}/services/web"
+    platform(service, "PUT", {
+        "cmd": "python3",
+        "args": [f"{RELEASE}/app.py", "serve"],
+        "dir": RELEASE,
+        "needs": [],
+        "http_port": 8080,
+        "env": {
+            "REACALCUL_DB": "/home/sprite/reacalcul-data/reacalcul.sqlite",
+            "REACALCUL_CPSC_CONNECTOR_URL": CONNECTOR,
+            "REACALCUL_REVISION": REVISION,
+        },
+    })
+    platform(service + "/restart", "POST")
+    platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})
+    verify(url)
+    print(f"Public demo: {url}")
+
+
+if __name__ == "__main__":
+    main()
