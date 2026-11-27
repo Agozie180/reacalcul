@@ -43,15 +43,17 @@ function entry(notice, result, newlyCovered = false) {
 }
 function render(data) {
   if (!data.appliance) return;
-  model.value = data.appliance.model;
-  serial.value = data.appliance.serial;
+  if (!data.preview) {
+    model.value = data.appliance.model;
+    serial.value = data.appliance.serial;
+  }
   const timeline = node("ol", "", "timeline");
   timeline.append(entry(notices.baseline, data.baseline), entry(notices.expansion, data.expansion, data.newly_covered));
   byId("results").replaceChildren(timeline);
-  byId("progress").textContent = data.expansion ? "Replay complete" : "July result saved";
+  byId("progress").textContent = data.preview ? "Sample replay" : data.expansion ? "Replay complete" : "July result saved";
   renderProof(data);
   renderWatch(data.watch);
-  byId("actions").hidden = false;
+  byId("actions").hidden = data.preview;
   replay.hidden = !!data.expansion;
   live.hidden = !data.expansion;
 }

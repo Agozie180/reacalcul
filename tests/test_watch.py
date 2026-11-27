@@ -34,6 +34,10 @@ class WatchTest(unittest.TestCase):
             self.assertIn("remains", app.matching_change(connection, "EFMIS121", "A2100", 95)["summary"])
             self.assertIsNone(app.matching_change(connection, "EFMIS175", "A2210", 95))
             self.assertIsNone(app.matching_change(connection, "EFMIS121", "A2210", 210))
+            app.record_feed(connection, [app.feed_record(earlier)], 400)
+            app.record_feed(connection, [app.feed_record(self.source)], 500)
+            self.assertIn("newly listed range", app.matching_change(connection, "EFMIS121", "A2210", 450)["summary"])
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM feed_changes").fetchone()[0], 2)
 
     def test_new_notice_and_whitespace_normalization(self):
         changed = dict(self.source, RecallNumber="26999", Description=self.source["Description"].replace(" Between ", "  Between   "))

@@ -187,9 +187,12 @@ def read_state(connection, session):
     row = connection.execute("SELECT * FROM checks WHERE session = ?", (session,)).fetchone()
     if not row:
         return {}
-    model, serial = row["model"], row["serial"]
+    return replay_state(connection, row["model"], row["serial"], row["expanded"], row["updated_at"])
+
+
+def replay_state(connection, model, serial, expanded, saved_at):
     baseline = matching(REPLAY[0], model, serial)
-    expansion = matching(REPLAY[1], model, serial) if row["expanded"] else None
+    expansion = matching(REPLAY[1], model, serial) if expanded else None
     if baseline["status"] == "covered":
         change = "already_covered"
     elif expansion and expansion["status"] == "covered":
@@ -204,8 +207,9 @@ def read_state(connection, session):
         "expansion": expansion,
         "newly_covered": change == "newly_covered",
         "change": change,
-        "watch": watch_status(connection, model, serial, row["updated_at"]) if expansion else None,
-        "saved_at": row["updated_at"],
+        "watch": watch_status(connection, model, serial, saved_at) if expansion and saved_at is not None else None,
+        "saved_at": saved_at,
+        "preview": saved_at is None,
         "control": matching(REPLAY[1], "EFMIS121", "A2401") if expansion and (model, serial) == ("EFMIS121", "A2210") else None,
     }
 
@@ -253,8 +257,10 @@ def record_feed(connection, records, checked_at):
             if before and before["fingerprint"] == item["fingerprint"]:
                 continue
             connection.execute("""
-                INSERT OR IGNORE INTO feed_changes(id, fingerprint, previous, notice, detected_at)
+                INSERT INTO feed_changes(id, fingerprint, previous, notice, detected_at)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id, fingerprint) DO UPDATE SET previous=excluded.previous,
+                    notice=excluded.notice, detected_at=excluded.detected_at
             """, (item["id"], item["fingerprint"], json.dumps(before), json.dumps(item), checked_at))
     connection.execute("""
         INSERT INTO feed_state(id, records, checked_at) VALUES (1, ?, ?)
@@ -413,10 +419,14 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": "The form could not be read."}, 400)
             return
         session = self.cookie()
-        if self.path in ("/api/check", "/api/demo"):
-            demo = self.path == "/api/demo"
-            raw_model = "EFMIS121" if demo else payload.get("model", "")
-            raw_serial = "A2210" if demo else payload.get("serial", "")
+        if self.path == "/api/demo":
+            with database() as connection:
+                state = replay_state(connection, "EFMIS121", "A2210", True, None)
+            self.json_response(state)
+            return
+        if self.path == "/api/check":
+            raw_model = payload.get("model", "")
+            raw_serial = payload.get("serial", "")
             if not isinstance(raw_model, str) or not isinstance(raw_serial, str):
                 self.json_response({"error": "Enter the model and serial as text."}, 400)
                 return
@@ -429,12 +439,12 @@ class Handler(BaseHTTPRequestHandler):
             with database() as connection:
                 connection.execute("""
                     INSERT INTO checks(session, model, serial, expanded, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, 0, ?)
                     ON CONFLICT(session) DO UPDATE SET model=excluded.model, serial=excluded.serial,
-                        expanded=excluded.expanded, updated_at=CASE
+                        expanded=0, updated_at=CASE
                             WHEN checks.model=excluded.model AND checks.serial=excluded.serial THEN checks.updated_at
                             ELSE excluded.updated_at END
-                """, (new_session, model, serial, int(demo), int(time.time())))
+                """, (new_session, model, serial, int(time.time())))
                 state = read_state(connection, new_session)
             self.json_response(state, cookie=new_session if not session else None)
             return

@@ -86,7 +86,8 @@ def verify(url):
         raise RuntimeError(f"Release did not pass the public health check: {last_health}")
     demo = public_json(opener, url, "/api/demo", {})
     assert demo["change"] == "newly_covered"
-    assert demo["control"]["status"] == "outside_serial"
+    assert demo["preview"] and demo["control"]["status"] == "outside_serial"
+    assert public_json(opener, url, "/api/state") == {}
     july = public_json(opener, url, "/api/check", {"model": "EFMIS121", "serial": "A2210"})
     january = public_json(opener, url, "/api/replay", {})
     restored = public_json(opener, url, "/api/state")
@@ -95,6 +96,9 @@ def verify(url):
     isolated = public_json(second, url, "/api/state")
     public_json(second, url, "/api/check", {"model": "EFMIS121", "serial": "A2401"})
     control = public_json(second, url, "/api/replay", {})
+    saved = public_json(second, url, "/api/state")
+    public_json(second, url, "/api/demo", {})
+    assert public_json(second, url, "/api/state") == saved
     assert july["baseline"]["status"] == "outside_model"
     assert january["newly_covered"] and january["expansion"]["status"] == "covered"
     assert january["expansion"]["quote"] == "EFMIS121 Between A2001 and A2310"

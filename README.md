@@ -6,11 +6,11 @@
 
 ## Judge walkthrough
 
-1. Select **See what changed**. The agent replays both official notices against the saved sample label **EFMIS121 / A2210**. It became newly covered in January.
+1. Select **See what changed**. The agent replays both official notices against the sample label **EFMIS121 / A2210**. It became newly covered in January.
 2. Compare **A2401** on the same model. It falls outside the January range. The receipt highlights the exact CPSC rule, both publication dates, and the official refund instructions.
 3. To see persistence between notices, use the form to save a label and check July. Reload, then replay January without entering it again.
 
-The notices, product photo, and approximately **330,000 additional units** are real. The two serial values are illustrative.
+The notices, product photo, and approximately **330,000 additional units** are real. The two serial values are illustrative. The one-click sample leaves your saved label untouched.
 
 [July CPSC notice](https://www.cpsc.gov/Recalls/2025/Curtis-International-Recalls-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards-More-Than-700-000-Reported-in-Property-Damage) · [January expansion](https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards)
 
