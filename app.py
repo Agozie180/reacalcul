@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -90,12 +91,16 @@ def compile_notice(record, parsed_via="bundled CPSC notice"):
     }
 
 
+def archived_records():
+    source = json.loads((ROOT / "cpsc-notices.json").read_text(encoding="utf-8"))
+    return {id_for(item): item for item in source}
+
+
 def load_replay():
     verified = ROOT / "verified-replay.json"
     if verified.exists():
         return json.loads(verified.read_text(encoding="utf-8"))
-    source = json.loads((ROOT / "cpsc-notices.json").read_text(encoding="utf-8"))
-    records = {id_for(item): item for item in source}
+    records = archived_records()
     return [compile_notice(records[key]) for key in ISSUES]
 
 
@@ -165,6 +170,16 @@ def init_db():
                 checked_at INTEGER NOT NULL
             )
         """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS feed_changes (
+                id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                previous TEXT NOT NULL,
+                notice TEXT NOT NULL,
+                detected_at INTEGER NOT NULL,
+                PRIMARY KEY(id, fingerprint)
+            )
+        """)
         connection.execute("DELETE FROM checks WHERE updated_at < ?", (int(time.time()) - 30 * 86400,))
 
 
@@ -189,7 +204,9 @@ def read_state(connection, session):
         "expansion": expansion,
         "newly_covered": change == "newly_covered",
         "change": change,
-        "watch": watch_status(connection, model) if expansion else None,
+        "watch": watch_status(connection, model, serial, row["updated_at"]) if expansion else None,
+        "saved_at": row["updated_at"],
+        "control": matching(REPLAY[1], "EFMIS121", "A2401") if expansion and (model, serial) == ("EFMIS121", "A2210") else None,
     }
 
 
@@ -197,60 +214,117 @@ def feed_snapshot(connection):
     return connection.execute("SELECT records, checked_at FROM feed_state WHERE id = 1").fetchone()
 
 
+def feed_record(item):
+    source = item["URL"]
+    if not source.startswith(("https://www.cpsc.gov/Recalls/", "https://cpsc.gov/Recalls/")):
+        raise ValueError("Unexpected CPSC link")
+    description = " ".join(item["Description"].split())
+    remedies = [" ".join(entry["Name"].split()) for entry in item.get("Remedies", [])]
+    core = {"title": item["Title"], "source": source, "scope": description, "remedies": remedies}
+    fingerprint = hashlib.sha256(json.dumps(core, sort_keys=True).encode()).hexdigest()
+    scope = dict(core, scope=REGEX.sub("", description))
+    scope_fingerprint = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    try:
+        rows = model_rules(description)
+    except ValueError:
+        rows = []
+    counts = {name: sum(row[0] == name for row in rows) for name, _, _, _ in rows}
+    ranges = {name: [start, end] for name, start, end, _ in rows if counts[name] == 1}
+    return {
+        "id": id_for(item),
+        "date": date.fromisoformat(item["RecallDate"][:10]).isoformat(),
+        "title": item["Title"],
+        "source": source,
+        "models": sorted(set(re.findall(r"\bEFMIS[0-9]+(?:-[A-Z0-9]+)?\b", description.upper()))),
+        "ranges": ranges,
+        "fingerprint": fingerprint,
+        "scope_fingerprint": scope_fingerprint,
+    }
+
+
+def record_feed(connection, records, checked_at):
+    snapshot = feed_snapshot(connection)
+    previous_records = json.loads(snapshot["records"]) if snapshot else []
+    initialized = bool(previous_records) and all(item.get("fingerprint") for item in previous_records)
+    if initialized:
+        previous = {item["id"]: item for item in previous_records}
+        for item in records:
+            before = previous.get(item["id"])
+            if before and before["fingerprint"] == item["fingerprint"]:
+                continue
+            connection.execute("""
+                INSERT OR IGNORE INTO feed_changes(id, fingerprint, previous, notice, detected_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (item["id"], item["fingerprint"], json.dumps(before), json.dumps(item), checked_at))
+    connection.execute("""
+        INSERT INTO feed_state(id, records, checked_at) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET records=excluded.records, checked_at=excluded.checked_at
+    """, (json.dumps(records), checked_at))
+    connection.execute("DELETE FROM feed_changes WHERE detected_at < ?", (checked_at - 30 * 86400,))
+
+
 def refresh_feed(interval):
     with LIVE_LOCK:
         with database() as connection:
             last = feed_snapshot(connection)
         now = int(time.time())
-        if last and now - last["checked_at"] < interval:
+        current_schema = last and all(item.get("fingerprint") for item in json.loads(last["records"]))
+        if current_schema and now - last["checked_at"] < interval:
             return {"checked_at": last["checked_at"], "refreshed": False}
         payload = http_json(API)
         if not isinstance(payload, list):
             raise ValueError("Unexpected CPSC response")
-        records = []
-        for item in payload:
-            if not isinstance(item, dict) or not is_frigidaire(item):
-                continue
-            source = item.get("URL", "")
-            if not source.startswith(("https://www.cpsc.gov/Recalls/", "https://cpsc.gov/Recalls/")):
-                continue
-            records.append({
-                "id": id_for(item),
-                "date": date.fromisoformat(item["RecallDate"][:10]).isoformat(),
-                "title": item["Title"],
-                "source": source,
-                "models": re.findall(r"\bEFMIS[0-9]+(?:-[A-Z0-9]+)?\b", item["Description"].upper()),
-            })
+        records = [feed_record(item) for item in payload if isinstance(item, dict) and is_frigidaire(item)]
         if not set(ISSUES).issubset(record["id"] for record in records):
             raise ValueError("CPSC returned an incomplete result")
         with database() as connection:
-            connection.execute("""
-                INSERT INTO feed_state(id, records, checked_at) VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET records=excluded.records, checked_at=excluded.checked_at
-            """, (json.dumps(records), now))
+            record_feed(connection, records, now)
         return {"checked_at": now, "refreshed": True}
 
 
-def watch_status(connection, model):
+def matching_change(connection, model, serial, saved_at):
+    changes = connection.execute(
+        """SELECT previous, notice FROM feed_changes WHERE detected_at >= ?
+           ORDER BY detected_at DESC, rowid DESC""", (saved_at,),
+    )
+    for row in changes:
+        before = json.loads(row["previous"])
+        after = json.loads(row["notice"])
+        previous_models = before["models"] if before else []
+        if after["models"] and model not in after["models"] and model not in previous_models:
+            continue
+        before_range = before["ranges"].get(model) if before else None
+        after_range = after["ranges"].get(model)
+        if before and before.get("scope_fingerprint") == after.get("scope_fingerprint") and before_range == after_range:
+            continue
+        result = {
+            "summary": "A watched notice changed. Review the official text." if before else "A new notice may apply. Review the official scope.",
+            "source": after["source"],
+            "title": after["title"],
+        }
+        if before_range != after_range and (before_range or after_range):
+            result["before_range"] = before_range
+            result["after_range"] = after_range
+            if after_range and RANGE_SERIAL.fullmatch(serial) and after_range[0] <= serial <= after_range[1]:
+                if not before_range or not before_range[0] <= serial <= before_range[1]:
+                    result["summary"] = "Your saved code falls in a newly listed range. Review the full official notice."
+                else:
+                    result["summary"] = "Your saved code remains in the revised range. Review the full official notice."
+        return result
+    return None
+
+
+def watch_status(connection, model, serial, saved_at):
     snapshot = feed_snapshot(connection)
     if not snapshot:
         return {"summary": "The current CPSC feed check is waiting for its first successful scan."}
-    records = json.loads(snapshot["records"])
-    newer = [
-        item for item in records
-        if item["date"] > REPLAY[1]["date"] and (not item["models"] or model in item["models"])
-    ]
     result = {
         "checked_at": datetime.fromtimestamp(snapshot["checked_at"], timezone.utc).isoformat(),
-        "summary": "No newer notice mentioning your model appeared in this recall series.",
+        "summary": "No relevant new or edited notice has been detected since this label was saved.",
     }
-    if newer:
-        item = max(newer, key=lambda notice: notice["date"])
-        result.update({
-            "summary": "A newer notice may be relevant. Review its scope on the CPSC site.",
-            "source": item["source"],
-            "title": item["title"],
-        })
+    change = matching_change(connection, model, serial, saved_at)
+    if change:
+        result.update(change)
     return result
 
 
@@ -322,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, KeyError, TypeError):
                 self.json_response({"error": "The CPSC feed refresh failed. The last successful scan is retained."}, 502)
             return
-        if self.path not in ("/api/check", "/api/replay", "/api/live"):
+        if self.path not in ("/api/check", "/api/demo", "/api/replay", "/api/live"):
             self.json_response({"error": "Page not found."}, 404)
             return
         if self.headers.get_content_type() != "application/json":
@@ -339,9 +413,10 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response({"error": "The form could not be read."}, 400)
             return
         session = self.cookie()
-        if self.path == "/api/check":
-            raw_model = payload.get("model", "")
-            raw_serial = payload.get("serial", "")
+        if self.path in ("/api/check", "/api/demo"):
+            demo = self.path == "/api/demo"
+            raw_model = "EFMIS121" if demo else payload.get("model", "")
+            raw_serial = "A2210" if demo else payload.get("serial", "")
             if not isinstance(raw_model, str) or not isinstance(raw_serial, str):
                 self.json_response({"error": "Enter the model and serial as text."}, 400)
                 return
@@ -354,10 +429,12 @@ class Handler(BaseHTTPRequestHandler):
             with database() as connection:
                 connection.execute("""
                     INSERT INTO checks(session, model, serial, expanded, updated_at)
-                    VALUES (?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(session) DO UPDATE SET model=excluded.model, serial=excluded.serial,
-                        expanded=0, updated_at=excluded.updated_at
-                """, (new_session, model, serial, int(time.time())))
+                        expanded=excluded.expanded, updated_at=CASE
+                            WHEN checks.model=excluded.model AND checks.serial=excluded.serial THEN checks.updated_at
+                            ELSE excluded.updated_at END
+                """, (new_session, model, serial, int(demo), int(time.time())))
                 state = read_state(connection, new_session)
             self.json_response(state, cookie=new_session if not session else None)
             return
@@ -381,14 +458,20 @@ class Handler(BaseHTTPRequestHandler):
         try:
             refresh_feed(MANUAL_REFRESH_INTERVAL)
             with database() as connection:
-                self.json_response(watch_status(connection, state["appliance"]["model"]))
+                self.json_response(watch_status(connection, state["appliance"]["model"], state["appliance"]["serial"], state["saved_at"]))
         except (OSError, URLError, ValueError, KeyError, TypeError):
             self.json_response({"error": "The CPSC feed is temporarily unavailable. The historical results are still available."}, 502)
 
 
 def import_replay():
     records = {id_for(item): item for item in http_json(API) if is_frigidaire(item)}
-    replay = [compile_notice(records[key], "Sprites CPSC connector") for key in ISSUES]
+    archive = archived_records()
+    for key in ISSUES:
+        current = records[key]
+        for field in ("URL", "RecallDate"):
+            if archive[key][field] != current[field]:
+                raise ValueError(f"Official identity of notice {key} changed; review the historical archive.")
+    replay = [compile_notice(archive[key], "Sprites CPSC connector") for key in ISSUES]
     output = ROOT / "verified-replay.json"
     temp = output.with_suffix(".tmp")
     temp.write_text(json.dumps(replay, indent=2) + "\n", encoding="utf-8")

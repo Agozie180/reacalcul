@@ -6,9 +6,11 @@
 
 ## Judge walkthrough
 
-1. Leave the example **EFMIS121 / A2210** in the form. Select **Save label and check July**. The July 24, 2025 notice covered four other models.
-2. Select **Replay January expansion**. The same saved label becomes **Newly covered**. The proof card quotes **EFMIS121 Between A2001 and A2310** and links to the notice and manufacturer's refund instructions.
-3. Select **Try A2401**, then replay January. The same model now falls outside the listed serial range. The product photo, both notices, and the approximately **330,000 additional units** are real. Both serial values are illustrative.
+1. Select **See what changed**. The agent replays both official notices against the saved sample label **EFMIS121 / A2210**. It became newly covered in January.
+2. Compare **A2401** on the same model. It falls outside the January range. The receipt highlights the exact CPSC rule, both publication dates, and the official refund instructions.
+3. To see persistence between notices, use the form to save a label and check July. Reload, then replay January without entering it again.
+
+The notices, product photo, and approximately **330,000 additional units** are real. The two serial values are illustrative.
 
 [July CPSC notice](https://www.cpsc.gov/Recalls/2025/Curtis-International-Recalls-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards-More-Than-700-000-Reported-in-Property-Damage) · [January expansion](https://www.cpsc.gov/Recalls/2026/Curtis-International-Expands-Recall-of-Frigidaire-brand-Minifridges-Due-to-Fire-and-Burn-Hazards)
 
@@ -16,7 +18,7 @@
 
 - **Saved label and replay.** SQLite stores each browser's appliance and the notice it has already seen. Replaying twice does not record a second change.
 - **Source-backed evidence.** A Sprites Custom API connector reads the official CPSC feed. The service uses exact model and serial rules for the two historical notices and uses the official text in the decision receipt.
-- **Daily watch.** GitHub Actions wakes the Sprite once a day for a read-only refresh. The dashboard displays the last successful scan and links to newer notices that may be relevant. A user can also check on demand. New notice formats are referred to the official source for review.
+- **Daily watch.** GitHub Actions wakes the Sprite once a day for a read-only refresh. The Sprite compares each scan with its previous snapshot and records new notices and edits under existing recall numbers. For a saved label, it shows relevant changes detected since the label was saved, including the old and new listed serial ranges when available. A user can also check on demand. New notice formats are referred to the official source for review.
 - **Low-cost hosting.** The Sprite can sleep between requests. The app uses the public CPSC data and has no model API charges. The historical replay is available from its verified snapshot when the feed is unavailable.
 
 The watch covers this U.S. Curtis International Frigidaire recall series. Checks and updates are shown in the browser. The January expansion page links to the original notice dated July 24, 2025, even though its unit-count note says July 2024.

@@ -84,6 +84,9 @@ def verify(url):
         time.sleep(5)
     else:
         raise RuntimeError(f"Release did not pass the public health check: {last_health}")
+    demo = public_json(opener, url, "/api/demo", {})
+    assert demo["change"] == "newly_covered"
+    assert demo["control"]["status"] == "outside_serial"
     july = public_json(opener, url, "/api/check", {"model": "EFMIS121", "serial": "A2210"})
     january = public_json(opener, url, "/api/replay", {})
     restored = public_json(opener, url, "/api/state")

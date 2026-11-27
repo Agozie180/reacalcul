@@ -73,6 +73,19 @@ function renderProof(data) {
   const label = node("span", savedModel + (savedSerial ? " / " + savedSerial : ""), "proof-label");
   proof.append(label, node("strong", title), node("p", detail));
 
+  if (data.control) {
+    const comparison = node("div", "", "comparison");
+    for (const [code, verdict, style] of [
+      [savedSerial, verdictTitles[data.expansion.status], data.newly_covered ? "affected" : ""],
+      ["A2401", verdictTitles[data.control.status], data.control.status === "covered" ? "affected" : ""],
+    ]) {
+      const tile = node("div", "", "comparison-label " + style);
+      tile.append(node("span", code), node("strong", verdict));
+      comparison.append(tile);
+    }
+    proof.append(comparison);
+  }
+
   if (data.newly_covered) {
     proof.append(node("blockquote", "\u201c" + data.expansion.quote + "\u201d"));
     const copy = node("button", "Copy decision receipt", "quiet");
@@ -113,6 +126,11 @@ function renderWatch(watch) {
     const date = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(stamp);
     box.append(node("small", "Last successful daily scan: " + date + " UTC"));
   }
+  if (watch.before_range || watch.after_range) {
+    const prior = watch.before_range?.join("–") || "No listed range";
+    const current = watch.after_range?.join("–") || "No listed range";
+    box.append(node("small", "Previous range " + prior + " · Current range " + current, "watch-delta"));
+  }
   if (watch.source) box.append(link(watch.source, (watch.title || "Read the newer notice") + " ↗"));
 }
 
@@ -136,7 +154,7 @@ async function run(button, path, payload, success) {
     const result = await api(path, payload);
     if (result.appliance) {
       render(result);
-      if (matchMedia("(max-width: 780px)").matches) {
+      if (button.id === "run-demo" || matchMedia("(max-width: 780px)").matches) {
         const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
         byId("history-panel").scrollIntoView({ block: "start", behavior });
       }
@@ -148,6 +166,7 @@ async function run(button, path, payload, success) {
     document.querySelectorAll("button").forEach((item) => { item.disabled = false; });
   }
 }
+byId("run-demo").addEventListener("click", () => run(byId("run-demo"), "/api/demo", {}));
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   run(byId("check"), "/api/check", { model: model.value, serial: serial.value });
