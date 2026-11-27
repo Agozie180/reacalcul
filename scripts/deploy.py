@@ -150,21 +150,25 @@ def main():
         list(pool.map(upload, FILES))
     config = json.dumps({"connector": CONNECTOR, "revision": REVISION, "watch_key": WATCH_KEY}).encode()
     upload_bytes("release.json", config, "0600")
-    python = f"{RELEASE}/venv/bin/python"
-    run_on_sprite("python3", "-m", "venv", f"{RELEASE}/venv")
-    run_on_sprite(python, "-m", "pip", "install", "--disable-pip-version-check", "-r", f"{RELEASE}/requirements.txt")
-    run_on_sprite(python, f"{RELEASE}/app.py", "import")
+    dependencies = f"{RELEASE}/deps"
+    upload_bytes("deps.tar.gz", Path(os.environ["PUSH_DEPENDENCIES"]).read_bytes())
+    run_on_sprite("mkdir", "-p", dependencies)
+    run_on_sprite("tar", "-xzf", f"{RELEASE}/deps.tar.gz", "-C", dependencies)
+    run_on_sprite("env", f"PYTHONPATH={dependencies}", "python3", f"{RELEASE}/app.py", "import")
     service = f"{SPRITE}/services/web"
     run_on_sprite("mkdir", "-p", SERVICE_ROOT)
     run_on_sprite("ln", "-sfn", f"{RELEASE}/app.py", f"{SERVICE_ROOT}/incoming.py")
     run_on_sprite("mv", "-Tf", f"{SERVICE_ROOT}/incoming.py", f"{SERVICE_ROOT}/app.py")
     platform(service, "PUT", {
-        "cmd": python,
+        "cmd": "python3",
         "args": [f"{SERVICE_ROOT}/app.py", "serve"],
         "dir": SERVICE_ROOT,
         "needs": [],
         "http_port": 8080,
-        "env": {"REACALCUL_DB": "/home/sprite/reacalcul-data/reacalcul.sqlite"},
+        "env": {
+            "PYTHONPATH": dependencies,
+            "REACALCUL_DB": "/home/sprite/reacalcul-data/reacalcul.sqlite",
+        },
     })
     platform(service + "/restart", "POST")
     platform(SPRITE, "PUT", {"url_settings": {"auth": "public"}})

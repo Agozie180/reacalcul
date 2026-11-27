@@ -20,14 +20,17 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Install push dependencies
+      - name: Build push dependencies
         run: |
           python3 -m venv "$RUNNER_TEMP/reacalcul-venv"
-          "$RUNNER_TEMP/reacalcul-venv/bin/python" -m pip install -r requirements.txt
+          "$RUNNER_TEMP/reacalcul-venv/bin/python" -m pip install --target "$RUNNER_TEMP/reacalcul-deps" -r requirements.txt
       - name: Test recall matching and notification delivery
-        run: '"$RUNNER_TEMP/reacalcul-venv/bin/python" -m unittest discover -s tests'
+        run: PYTHONPATH="$RUNNER_TEMP/reacalcul-deps" python3 -m unittest discover -s tests
+      - name: Package the tested dependencies
+        run: tar -C "$RUNNER_TEMP/reacalcul-deps" -czf "$RUNNER_TEMP/reacalcul-deps.tar.gz" .
       - name: Publish and verify reacalcul
         env:
+          PUSH_DEPENDENCIES: ${{ runner.temp }}/reacalcul-deps.tar.gz
           SPRITES_TOKEN: ${{ secrets.SPRITES_TOKEN }}
           WATCH_REFRESH_KEY: ${{ secrets.WATCH_REFRESH_KEY }}
           CPSC_CONNECTOR_URL: ${{ vars.CPSC_CONNECTOR_URL }}
