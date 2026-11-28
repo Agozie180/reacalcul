@@ -226,8 +226,13 @@ function renderWatch(watch) {
     box.append(node("small", "Last successful CPSC scan: " + date + " UTC"));
   }
   if (watch.before_range || watch.after_range) {
-    const prior = watch.before_range?.join("–") || "No listed range";
-    const current = watch.after_range?.join("–") || "No listed range";
+    const formatRanges = (ranges) => {
+      if (!ranges) return "No listed range";
+      const pairs = Array.isArray(ranges[0]) ? ranges : [ranges];
+      return pairs.map((pair) => pair.join("–")).join(", ");
+    };
+    const prior = formatRanges(watch.before_range);
+    const current = formatRanges(watch.after_range);
     box.append(node("small", "Previous range " + prior + " · Current range " + current, "watch-delta"));
   }
   if (watch.source) box.append(link(watch.source, (watch.title || "Read the newer notice") + " ↗"));

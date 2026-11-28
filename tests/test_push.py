@@ -85,6 +85,35 @@ class PushTest(unittest.TestCase):
             sessions = connection.execute("SELECT session FROM push_deliveries").fetchall()
             self.assertEqual([row[0] for row in sessions], ["newly-covered"])
 
+    def test_second_range_alerts_only_newly_covered_label(self):
+        original = app.archived_records()["26199"]
+        description = original["Description"]
+        expanded = app.feed_record({
+            **original, "Description": description + ". EFMIS121 date codes A2401 through A2500",
+        })
+        combined = app.feed_record({
+            **original, "Description": description + " and A2401 through A2500",
+        })
+        self.assertEqual(watch_push.ranges_for(combined, "EFMIS121"), [
+            ["A2001", "A2310"], ["A2401", "A2500"],
+        ])
+        legacy = self.january.copy()
+        del legacy["multiple_ranges"]
+        with app.database() as connection:
+            self.save(connection, "already-covered", "A2210")
+            self.save(connection, "newly-covered", "A2401")
+            self.save(connection, "between-ranges", "A2400")
+            app.record_feed(connection, [self.july, legacy], self.now - 1)
+            app.record_feed(connection, [self.july, expanded], self.now)
+            app.record_feed(connection, [self.july, expanded], self.now)
+            jobs = connection.execute("SELECT session, payload FROM push_deliveries").fetchall()
+            self.assertEqual([row["session"] for row in jobs], ["newly-covered"])
+            self.assertEqual(json.loads(jobs[0]["payload"])["range"], ["A2401", "A2500"])
+            change = app.matching_change(connection, "EFMIS121", "A2401", self.now - 1)
+            self.assertIn("newly listed range", change["summary"])
+            watch = app.watch_status(connection, "EFMIS121", "A2500", self.now + 1)
+            self.assertIn("A2401–A2500", watch["summary"])
+
     def test_ambiguous_prior_scope_needs_review_instead_of_an_alert(self):
         for prior_models in (["EFMIS121"], []):
             with self.subTest(prior_models=prior_models), app.database() as connection:
