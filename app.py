@@ -40,7 +40,13 @@ ASSETS = {
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
     "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
 }
-REGEX = re.compile(r"\b(EFMIS[0-9]+)\s+Between\s+(A[0-9]{4})\s+(?:and|to)\s+(A[0-9]{4})\b", re.I)
+SERIAL_BOUNDS = r"A[0-9]{4}\s+(?:and|to|through)\s+A[0-9]{4}\b"
+RANGE_BOUNDS = re.compile(SERIAL_BOUNDS, re.I)
+REGEX = re.compile(
+    rf"\b(EFMIS[0-9]+)\s+(?:between|date\s+codes?)\s+"
+    rf"({SERIAL_BOUNDS}(?:(?:\s*,\s*|\s+(?:and|or)\s+){SERIAL_BOUNDS})*)",
+    re.I,
+)
 MODEL = re.compile(r"[A-Z0-9][A-Z0-9-]{1,23}")
 SERIAL = re.compile(r"[A-Z0-9][A-Z0-9-]{0,31}")
 RANGE_SERIAL = re.compile(r"A[0-9]{4}")
@@ -76,11 +82,24 @@ def is_frigidaire(record):
 def model_rules(description):
     rules = []
     for match in REGEX.finditer(description):
-        name, start, end = (value.upper() for value in match.groups())
-        if start > end:
-            raise ValueError("Official range order is ambiguous")
-        rules.append((name, start, end, match.group(0)))
+        name = match.group(1).upper()
+        for bounds in RANGE_BOUNDS.finditer(match.group(2)):
+            start, _, end = bounds.group().upper().split()
+            if start > end:
+                raise ValueError("Official range order is ambiguous")
+            rules.append((name, start, end, match.group(0)))
     return rules
+
+
+def range_fields(rules):
+    by_model = {}
+    for name, start, end, _ in rules:
+        by_model.setdefault(name, []).append([start, end])
+    # Preserve the single-range field so a rolled-back release can read the snapshot.
+    return {
+        "ranges": {name: pairs[0] for name, pairs in by_model.items() if len(pairs) == 1},
+        "multiple_ranges": {name: pairs for name, pairs in by_model.items() if len(pairs) > 1},
+    }
 
 
 def compile_notice(record, parsed_via="bundled CPSC notice"):
@@ -115,6 +134,7 @@ def load_replay():
 
 
 def matching(notice, model, serial):
+    outside = None
     for name, start, end, quote in notice["rules"]:
         if name != model:
             continue
@@ -135,13 +155,16 @@ def matching(notice, model, serial):
                 "evidence": evidence,
                 "quote": quote,
             }
-        return {
-            "status": "outside_serial",
-            "reason": f"Your saved code {serial} falls outside the listed range for {model}.",
-            "source": notice["source"],
-            "evidence": evidence,
-            "quote": quote,
-        }
+        if outside is None:
+            outside = {
+                "status": "outside_serial",
+                "reason": f"Your saved code {serial} falls outside the listed range for {model}.",
+                "source": notice["source"],
+                "evidence": evidence,
+                "quote": quote,
+            }
+    if outside:
+        return outside
     return {
         "status": "outside_model",
         "reason": f"{model} is outside this notice’s model list.",
@@ -249,15 +272,13 @@ def feed_record(item):
         rows = model_rules(description)
     except ValueError:
         rows = []
-    counts = {name: sum(row[0] == name for row in rows) for name, _, _, _ in rows}
-    ranges = {name: [start, end] for name, start, end, _ in rows if counts[name] == 1}
     return {
         "id": id_for(item),
         "date": date.fromisoformat(item["RecallDate"][:10]).isoformat(),
         "title": item["Title"],
         "source": source,
         "models": sorted(set(re.findall(r"\bEFMIS[0-9]+(?:-[A-Z0-9]+)?\b", description.upper()))),
-        "ranges": ranges,
+        **range_fields(rows),
         "remedy": REFUND_URL if id_for(item) in ISSUES and any('refund' in remedy.lower() for remedy in remedies) else None,
         "fingerprint": fingerprint,
         "scope_fingerprint": scope_fingerprint,
@@ -318,9 +339,9 @@ def matching_change(connection, model, serial, saved_at):
         previous_models = before["models"] if before else []
         if after["models"] and model not in after["models"] and model not in previous_models:
             continue
-        before_range = before["ranges"].get(model) if before else None
-        after_range = after["ranges"].get(model)
-        if before and before.get("scope_fingerprint") == after.get("scope_fingerprint") and before_range == after_range:
+        before_ranges = watch_push.ranges_for(before, model) if before else []
+        after_ranges = watch_push.ranges_for(after, model)
+        if before and before.get("scope_fingerprint") == after.get("scope_fingerprint") and before_ranges == after_ranges:
             continue
         result = {
             "summary": "A watched notice changed. Review the official text." if before else "A new notice may apply. Review the official scope.",
@@ -328,10 +349,10 @@ def matching_change(connection, model, serial, saved_at):
             "title": after["title"],
             "remedy": after.get("remedy"),
         }
-        if before_range != after_range and (before_range or after_range):
-            result["before_range"] = before_range
-            result["after_range"] = after_range
-            if after_range and RANGE_SERIAL.fullmatch(serial) and after_range[0] <= serial <= after_range[1]:
+        if before_ranges != after_ranges:
+            result["before_range"] = before_ranges[0] if len(before_ranges) == 1 else before_ranges or None
+            result["after_range"] = after_ranges[0] if len(after_ranges) == 1 else after_ranges or None
+            if RANGE_SERIAL.fullmatch(serial) and watch_push.matching_range(after, model, serial):
                 previous_coverage = watch_push.coverage(before, model, serial) if before else False
                 if previous_coverage is None:
                     result["summary"] = "The revised range includes your code. Review the official notice to confirm previous coverage."
@@ -356,9 +377,10 @@ def watch_status(connection, model, serial, saved_at):
         result.update(change)
     elif RANGE_SERIAL.fullmatch(serial):
         for notice in json.loads(snapshot["records"]):
-            if not notice.get("ranges") or watch_push.coverage(notice, model, serial) is not True:
+            bounds = watch_push.matching_range(notice, model, serial)
+            if not bounds:
                 continue
-            start, end = notice["ranges"][model]
+            start, end = bounds
             result.update({
                 "summary": f"The latest CPSC scan lists your code in the {start}–{end} recall range.",
                 "source": notice["source"],
@@ -587,8 +609,8 @@ def historical_notification():
     rule = matching(notice, model, serial)
     if rule["status"] != "covered" or matching(REPLAY[0], model, serial)["status"] == "covered":
         raise ValueError("The historical example is no longer available.")
-    ranges = {name: [start, end] for name, start, end, _ in notice["rules"]}
-    return watch_push.notification(model, serial, {**notice, "ranges": ranges, "remedy": REFUND_URL}, example=True)
+    alert_notice = {**notice, **range_fields(notice["rules"]), "remedy": REFUND_URL}
+    return watch_push.notification(model, serial, alert_notice, example=True)
 
 
 def import_replay():

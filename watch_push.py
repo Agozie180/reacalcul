@@ -135,7 +135,7 @@ def status(connection, session):
 
 
 def notification(model, serial, notice, *, example=False):
-    start, end = notice["ranges"][model]
+    start, end = matching_range(notice, model, serial)
     return {
         "title": "Historical example: recall coverage changed" if example else "Recall update: your label is newly listed",
         "body": (
@@ -153,10 +153,21 @@ def notification(model, serial, notice, *, example=False):
     }
 
 
-def coverage(notice, model, serial):
+def ranges_for(notice, model):
+    pairs = notice.get("multiple_ranges", {}).get(model)
+    if pairs:
+        return pairs
     bounds = notice["ranges"].get(model)
-    if bounds:
-        return bounds[0] <= serial <= bounds[1]
+    return [bounds] if bounds else []
+
+
+def matching_range(notice, model, serial):
+    return next((bounds for bounds in ranges_for(notice, model) if bounds[0] <= serial <= bounds[1]), None)
+
+
+def coverage(notice, model, serial):
+    if ranges_for(notice, model):
+        return matching_range(notice, model, serial) is not None
     models = notice["models"]
     if not models or model in models:
         return None
